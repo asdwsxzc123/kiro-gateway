@@ -1,0 +1,58 @@
+/**
+ * Express 应用配置
+ */
+
+import express, { Express } from 'express'
+import cors from 'cors'
+import { createLogger } from './utils/logger.js'
+import routes from './routes/index.js'
+import { authMiddleware } from './middleware/auth.js'
+import { requestLoggerMiddleware } from './middleware/requestLogger.js'
+import { rateLimitMiddleware } from './middleware/rateLimit.js'
+import { notFoundHandler, errorHandler } from './middleware/errorHandler.js'
+
+const logger = createLogger('App')
+
+/**
+ * 创建 Express 应用
+ */
+export function createApp(): Express {
+  const app = express()
+
+  // 基础中间件
+  app.use(cors())
+  app.use(express.json({ limit: '50mb' }))
+  app.use(express.urlencoded({ extended: true }))
+
+  // 请求日志
+  app.use(requestLoggerMiddleware)
+
+  // 限流中间件
+  app.use(rateLimitMiddleware)
+
+  // API Key 认证（代理和管理接口）
+  app.use('/v1', authMiddleware)
+  app.use('/api', authMiddleware)
+
+  // 健康检查（不需要认证）
+  app.get('/health', (_req, res) => {
+    res.json({
+      status: 'ok',
+      timestamp: Date.now(),
+      version: '1.0.0'
+    })
+  })
+
+  // 注册路由
+  app.use(routes)
+
+  // 404 处理
+  app.use(notFoundHandler)
+
+  // 错误处理
+  app.use(errorHandler)
+
+  logger.info('Express app created')
+
+  return app
+}
