@@ -491,12 +491,12 @@ export function claudeToKiro(
   const kiroTools = convertClaudeTools(request.tools)
 
   // 调试：打印工具转换结果
-  console.log('[claudeToKiro] Tools conversion:', {
-    hasRequestTools: !!request.tools,
-    requestToolsCount: request.tools?.length || 0,
-    kiroToolsCount: kiroTools.length,
-    toolNames: kiroTools.map(t => t.toolSpecification.name)
-  })
+  // console.log('[claudeToKiro] Tools conversion:', {
+  //   hasRequestTools: !!request.tools,
+  //   requestToolsCount: request.tools?.length || 0,
+  //   kiroToolsCount: kiroTools.length,
+  //   toolNames: kiroTools.map(t => t.toolSpecification.name)
+  // })
 
   return buildKiroPayload(
     finalContent,

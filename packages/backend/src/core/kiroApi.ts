@@ -131,28 +131,22 @@ You MUST follow these rules for ALL file operations. Violation causes server tim
 
 REMEMBER: When in doubt, write LESS per operation. Multiple small operations > one large operation.`
 
-// Thinking 模式标签
-const THINKING_MODE_PROMPT = `<thinking_mode>enabled</thinking_mode>
-<max_thinking_length>200000</max_thinking_length>`
-
 /**
  * 注入系统提示
+ * 注意：Kiro API 不支持通过系统提示中的 XML 标签启用 thinking 模式
+ * 如果注入 <thinking_mode> 标签，模型会自己生成 <thinking>...</thinking> 内容
+ * 但这些内容会被当作普通 assistantResponseEvent 返回，而不是 reasoningContentEvent
  */
 export function injectSystemPrompts(
   content: string,
   isAgentic: boolean,
-  thinkingEnabled: boolean
+  _thinkingEnabled: boolean  // 保留参数但不使用，避免破坏调用方
 ): string {
   let result = content
 
   // 注入时间戳
   const timestamp = new Date().toISOString()
   const timestampPrompt = `Current time: ${timestamp}`
-
-  // 注入 Thinking 模式（必须在最前面）
-  if (thinkingEnabled) {
-    result = THINKING_MODE_PROMPT + '\n\n' + result
-  }
 
   // 注入 Agentic 模式提示
   if (isAgentic) {

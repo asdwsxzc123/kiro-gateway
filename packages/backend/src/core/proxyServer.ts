@@ -586,7 +586,9 @@ export class ProxyServer {
     // 检查是否启用 Thinking 模式
     const modelThinkingEnabled = this.config.modelThinkingMode?.[request.model]
     const headerThinking = headers?.['anthropic-beta']?.toLowerCase().includes('thinking')
-    const thinkingEnabled = modelThinkingEnabled || headerThinking
+    // 硬编码不是用 thinking
+    const thinkingEnabled = false
+    // const thinkingEnabled = modelThinkingEnabled || headerThinking
 
     // 用于检测 <thinking> 标签
     let textBuffer = ''
@@ -836,6 +838,7 @@ export class ProxyServer {
     // 检查是否启用 Thinking 模式
     const modelThinkingEnabled = this.config.modelThinkingMode?.[request.model]
     const headerThinking = headers?.['anthropic-beta']?.toLowerCase().includes('thinking')
+		console.log("TCL: headers", headers)
     const thinkingEnabled = modelThinkingEnabled || headerThinking
 
     try {
