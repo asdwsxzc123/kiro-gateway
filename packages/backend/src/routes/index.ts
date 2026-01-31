@@ -11,11 +11,12 @@ import statsRouter from './stats.js'
 import logsRouter from './logs.js'
 import adminRouter from './admin.js'
 import authRouter from './auth.js'
+import { authMiddleware } from '../middleware/auth.js'
 
 const router: IRouter = Router()
 
-// 代理路由 - /v1/*
-router.use('/v1', proxyRouter)
+// 代理路由 - /v1/* (需要 API Key 认证)
+router.use('/v1', authMiddleware, proxyRouter)
 
 // 账号管理路由 - /api/accounts/*
 router.use('/api/accounts', accountsRouter)

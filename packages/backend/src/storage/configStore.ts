@@ -238,8 +238,9 @@ export async function validateApiKey(key: string): Promise<boolean> {
     const data = await redis.hgetall(API_KEYS_KEY)
 
     if (!data || Object.keys(data).length === 0) {
-      // 没有配置任何 API Key，允许访问
-      return true
+      // 没有配置任何 API Key，拒绝访问（更安全的默认行为）
+      logger.warn('No API keys configured, access denied')
+      return false
     }
 
     for (const json of Object.values(data)) {

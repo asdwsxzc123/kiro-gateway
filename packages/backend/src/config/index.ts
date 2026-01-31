@@ -115,7 +115,7 @@ export function loadConfig(): Config {
     security: {
       apiKey: process.env.API_KEY || '',
       encryptionKey: process.env.ENCRYPTION_KEY || '',
-      requireApiKey: process.env.REQUIRE_API_KEY === 'true'
+      requireApiKey: process.env.REQUIRE_API_KEY !== 'false'
     },
     proxy: {
       enableMultiAccount: process.env.ENABLE_MULTI_ACCOUNT !== 'false',

@@ -593,7 +593,7 @@ async function parseEventStream(
             if (eventType === 'assistantResponseEvent' || event.assistantResponseEvent) {
               const assistantResp = event.assistantResponseEvent || event
               const content = assistantResp.content
-              console.log(`[assistantResponse] content=${content?.slice(0, 150)}`)
+              // console.log(`[assistantResponse] content=${content?.slice(0, 150)}`)
               if (content) {
                 onChunk(content)
                 totalOutputChars += content.length
