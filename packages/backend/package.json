@@ -13,6 +13,7 @@
   },
   "dependencies": {
     "@kiro-gateway/shared": "workspace:*",
+    "bcryptjs": "^3.0.3",
     "cbor-x": "^1.6.0",
     "chokidar": "^5.0.0",
     "compression": "^1.7.5",
@@ -22,15 +23,18 @@
     "express-rate-limit": "^7.5.0",
     "helmet": "^8.0.0",
     "ioredis": "^5.4.2",
+    "jsonwebtoken": "^9.0.3",
     "rate-limit-redis": "^4.2.0",
     "uuid": "^11.0.5",
     "winston": "^3.17.0"
   },
   "devDependencies": {
+    "@types/bcryptjs": "^3.0.0",
     "@types/chokidar": "^2.1.7",
     "@types/compression": "^1.7.5",
     "@types/cors": "^2.8.17",
     "@types/express": "^5.0.0",
+    "@types/jsonwebtoken": "^9.0.10",
     "@types/node": "^22.10.7",
     "@types/uuid": "^10.0.0",
     "@typescript-eslint/eslint-plugin": "^8.21.0",

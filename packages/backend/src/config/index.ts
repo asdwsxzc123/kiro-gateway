@@ -64,6 +64,18 @@ export interface LogConfig {
   maxEntries: number
 }
 
+// JWT 配置
+export interface JwtConfig {
+  secret: string
+  expiresIn: string
+}
+
+// Admin 配置
+export interface AdminConfig {
+  username: string
+  password: string
+}
+
 // 账号池配置
 export interface AccountPoolConfig {
   cooldownMs: number
@@ -80,6 +92,8 @@ export interface Config {
   rateLimit: RateLimitConfig
   log: LogConfig
   accountPool: AccountPoolConfig
+  jwt: JwtConfig
+  admin: AdminConfig
 }
 
 /**
@@ -127,6 +141,14 @@ export function loadConfig(): Config {
       cooldownMs: DEFAULT_ACCOUNT_POOL_CONFIG.cooldownMs,
       maxErrorCount: DEFAULT_ACCOUNT_POOL_CONFIG.maxErrorCount,
       quotaResetMs: DEFAULT_ACCOUNT_POOL_CONFIG.quotaResetMs
+    },
+    jwt: {
+      secret: process.env.JWT_SECRET || 'default-jwt-secret-change-in-production',
+      expiresIn: process.env.JWT_EXPIRES_IN || '24h'
+    },
+    admin: {
+      username: process.env.ADMIN_USERNAME || 'admin',
+      password: process.env.ADMIN_PASSWORD || 'admin123'
     }
   }
 }

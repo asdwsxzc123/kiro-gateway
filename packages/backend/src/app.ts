@@ -6,17 +6,21 @@ import express, { Express } from 'express'
 import cors from 'cors'
 import { createLogger } from './utils/logger.js'
 import routes from './routes/index.js'
-import { authMiddleware } from './middleware/auth.js'
+import { jwtAuthMiddleware } from './middleware/jwtAuth.js'
 import { requestLoggerMiddleware } from './middleware/requestLogger.js'
 import { rateLimitMiddleware } from './middleware/rateLimit.js'
 import { notFoundHandler, errorHandler } from './middleware/errorHandler.js'
+import { initAdmin } from './storage/adminStore.js'
 
 const logger = createLogger('App')
 
 /**
  * 创建 Express 应用
  */
-export function createApp(): Express {
+export async function createApp(): Promise<Express> {
+  // 初始化 Admin 账户
+  await initAdmin()
+
   const app = express()
 
   // 基础中间件
@@ -30,9 +34,8 @@ export function createApp(): Express {
   // 限流中间件
   app.use(rateLimitMiddleware)
 
-  // API Key 认证（代理和管理接口）
-  app.use('/v1', authMiddleware)
-  app.use('/api', authMiddleware)
+  // JWT 认证（仅管理接口，/v1 代理接口不需要 JWT）
+  app.use('/api', jwtAuthMiddleware)
 
   // 健康检查（不需要认证）
   app.get('/health', (_req, res) => {

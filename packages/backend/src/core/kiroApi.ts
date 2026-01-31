@@ -587,7 +587,7 @@ async function parseEventStream(
             const payloadText = new TextDecoder().decode(payloadBytes)
             const event = JSON.parse(payloadText)
 
-            console.log(`[Event] type=${eventType || 'unknown'} keys=[${Object.keys(event).join(',')}] data=${JSON.stringify(event).slice(0, 200)}`)
+            console.log(`[Event] data=${JSON.stringify(event).slice(0, 200)}`)
 
             // 处理 assistantResponseEvent
             if (eventType === 'assistantResponseEvent' || event.assistantResponseEvent) {
@@ -959,8 +959,10 @@ export async function callKiroApiStream(
       lastError = error as Error
       logger.error(`Endpoint ${endpoint.name} failed`, { error: (error as Error).message })
 
+      // Auth error 不再重新抛出，而是通过 onError 回调处理
       if ((error as Error).message.includes('Auth error')) {
-        throw error
+        onError(error as Error)
+        return
       }
     }
   }

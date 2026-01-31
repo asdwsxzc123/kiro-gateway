@@ -1,6 +1,8 @@
 import axios from "axios"
 import { toast } from "@/hooks/use-toast"
 
+const TOKEN_KEY = "jwt_token"
+
 /**
  * API 客户端实例
  * 配置基础 URL 和默认请求头
@@ -16,9 +18,9 @@ export const apiClient = axios.create({
 // 请求拦截器 - 添加认证 token
 apiClient.interceptors.request.use(
   (config) => {
-    const apiKey = localStorage.getItem("apiKey")
-    if (apiKey) {
-      config.headers.Authorization = `Bearer ${apiKey}`
+    const token = localStorage.getItem(TOKEN_KEY)
+    if (token) {
+      config.headers.Authorization = `Bearer ${token}`
     }
     return config
   },
@@ -43,6 +45,17 @@ apiClient.interceptors.response.use(
     return response
   },
   (error) => {
+    // 401 错误处理 - 自动跳转登录页
+    if (error.response?.status === 401) {
+      // 清除 token
+      localStorage.removeItem(TOKEN_KEY)
+      // 如果不在登录页，则跳转到登录页
+      if (!window.location.pathname.includes("/login")) {
+        window.location.href = "/login"
+      }
+      return Promise.reject(error)
+    }
+
     // HTTP 错误处理
     const message = error.response?.data?.error?.message || error.response?.data?.message || error.message || "请求失败"
     toast({

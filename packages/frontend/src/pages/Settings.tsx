@@ -1,6 +1,6 @@
 import { useState } from "react"
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
-import { Copy, Plus, Trash2, Save } from "lucide-react"
+import { Copy, Plus, Trash2, Save, Lock } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -39,6 +39,7 @@ import {
 } from "@/components/ui/select"
 import { useToast } from "@/hooks/use-toast"
 import { getConfig, updateConfig, getApiKeys, createApiKey, deleteApiKey } from "@/api/config"
+import { authApi } from "@/api/auth"
 import type { UpdateConfigRequest } from "@kiro-gateway/shared"
 
 /**
@@ -50,6 +51,11 @@ export function Settings() {
   const queryClient = useQueryClient()
   const [isAddKeyDialogOpen, setIsAddKeyDialogOpen] = useState(false)
   const [newKeyName, setNewKeyName] = useState("")
+
+  // 修改密码状态
+  const [oldPassword, setOldPassword] = useState("")
+  const [newPassword, setNewPassword] = useState("")
+  const [confirmPassword, setConfirmPassword] = useState("")
 
   // 获取配置
   const { data: config, isLoading: configLoading } = useQuery({
@@ -119,6 +125,53 @@ export function Settings() {
       })
     },
   })
+
+  // 修改密码
+  const updatePasswordMutation = useMutation({
+    mutationFn: () => authApi.updatePassword(oldPassword, newPassword),
+    onSuccess: () => {
+      toast({ title: "修改成功", description: "密码已更新" })
+      setOldPassword("")
+      setNewPassword("")
+      setConfirmPassword("")
+    },
+    onError: (error: Error) => {
+      toast({
+        title: "修改失败",
+        description: error.message,
+        variant: "destructive",
+      })
+    },
+  })
+
+  // 处理修改密码
+  const handleUpdatePassword = () => {
+    if (!oldPassword || !newPassword || !confirmPassword) {
+      toast({
+        title: "错误",
+        description: "请填写所有密码字段",
+        variant: "destructive",
+      })
+      return
+    }
+    if (newPassword !== confirmPassword) {
+      toast({
+        title: "错误",
+        description: "新密码与确认密码不一致",
+        variant: "destructive",
+      })
+      return
+    }
+    if (newPassword.length < 6) {
+      toast({
+        title: "错误",
+        description: "新密码长度至少为 6 位",
+        variant: "destructive",
+      })
+      return
+    }
+    updatePasswordMutation.mutate()
+  }
 
   // 复制 API Key
   const copyApiKey = (key: string) => {
@@ -200,6 +253,7 @@ export function Settings() {
           <TabsTrigger value="token">Token刷新</TabsTrigger>
           <TabsTrigger value="pool">账号池</TabsTrigger>
           <TabsTrigger value="advanced">高级配置</TabsTrigger>
+          <TabsTrigger value="password">修改密码</TabsTrigger>
         </TabsList>
 
         {/* API Keys 管理 */}
@@ -715,6 +769,65 @@ export function Settings() {
               >
                 <Save className="mr-2 h-4 w-4" />
                 {updateMutation.isPending ? "保存中..." : "保存配置"}
+              </Button>
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        {/* 修改密码 */}
+        <TabsContent value="password">
+          <Card>
+            <CardHeader>
+              <CardTitle>修改密码</CardTitle>
+              <CardDescription>
+                更新您的登录密码
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-6">
+              <div className="grid gap-4 max-w-md">
+                <div className="space-y-2">
+                  <Label htmlFor="oldPassword">旧密码</Label>
+                  <Input
+                    id="oldPassword"
+                    type="password"
+                    placeholder="请输入旧密码"
+                    value={oldPassword}
+                    onChange={(e) => setOldPassword(e.target.value)}
+                    autoComplete="current-password"
+                  />
+                </div>
+
+                <div className="space-y-2">
+                  <Label htmlFor="newPassword">新密码</Label>
+                  <Input
+                    id="newPassword"
+                    type="password"
+                    placeholder="请输入新密码（至少 6 位）"
+                    value={newPassword}
+                    onChange={(e) => setNewPassword(e.target.value)}
+                    autoComplete="new-password"
+                  />
+                </div>
+
+                <div className="space-y-2">
+                  <Label htmlFor="confirmPassword">确认新密码</Label>
+                  <Input
+                    id="confirmPassword"
+                    type="password"
+                    placeholder="请再次输入新密码"
+                    value={confirmPassword}
+                    onChange={(e) => setConfirmPassword(e.target.value)}
+                    autoComplete="new-password"
+                  />
+                </div>
+              </div>
+
+              <Button
+                onClick={handleUpdatePassword}
+                disabled={updatePasswordMutation.isPending}
+              >
+                <Lock className="mr-2 h-4 w-4" />
+                {updatePasswordMutation.isPending ? "修改中..." : "修改密码"}
               </Button>
             </CardContent>
           </Card>

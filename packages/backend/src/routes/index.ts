@@ -10,6 +10,7 @@ import accountsRouter from './accounts.js'
 import statsRouter from './stats.js'
 import logsRouter from './logs.js'
 import adminRouter from './admin.js'
+import authRouter from './auth.js'
 
 const router: IRouter = Router()
 
@@ -27,5 +28,8 @@ router.use('/api/logs', logsRouter)
 
 // 管理路由 - /api/admin/*
 router.use('/api/admin', adminRouter)
+
+// 认证路由 - /api/auth/*
+router.use('/api/auth', authRouter)
 
 export default router

@@ -34,7 +34,7 @@ async function start(): Promise<void> {
   }
 
   // 创建 Express 应用
-  const app = createApp()
+  const app = await createApp()
 
   // 启动 HTTP 服务器
   const server = app.listen(config.server.port, config.server.host, () => {
