@@ -1,0 +1,725 @@
+import { useState } from "react"
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
+import { Copy, Plus, Trash2, Save } from "lucide-react"
+import { Button } from "@/components/ui/button"
+import { Input } from "@/components/ui/input"
+import { Label } from "@/components/ui/label"
+import { Switch } from "@/components/ui/switch"
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card"
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table"
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from "@/components/ui/dialog"
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
+import { useToast } from "@/hooks/use-toast"
+import { getConfig, updateConfig, getApiKeys, createApiKey, deleteApiKey } from "@/api/config"
+import type { UpdateConfigRequest } from "@kiro-gateway/shared"
+
+/**
+ * Settings 页面 - 系统配置
+ * 管理 API Key、限流和其他设置
+ */
+export function Settings() {
+  const { toast } = useToast()
+  const queryClient = useQueryClient()
+  const [isAddKeyDialogOpen, setIsAddKeyDialogOpen] = useState(false)
+  const [newKeyName, setNewKeyName] = useState("")
+
+  // 获取配置
+  const { data: config, isLoading: configLoading } = useQuery({
+    queryKey: ["config"],
+    queryFn: getConfig,
+  })
+
+  // 获取 API Keys
+  const { data: apiKeys, isLoading: keysLoading } = useQuery({
+    queryKey: ["apiKeys"],
+    queryFn: getApiKeys,
+  })
+
+  // 本地配置状态
+  const [localConfig, setLocalConfig] = useState<UpdateConfigRequest>({})
+
+  // 更新配置
+  const updateMutation = useMutation({
+    mutationFn: updateConfig,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["config"] })
+      toast({ title: "保存成功", description: "配置已更新" })
+    },
+    onError: (error: Error) => {
+      toast({
+        title: "保存失败",
+        description: error.message,
+        variant: "destructive",
+      })
+    },
+  })
+
+  // 创建 API Key
+  const createKeyMutation = useMutation({
+    mutationFn: createApiKey,
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ["apiKeys"] })
+      setIsAddKeyDialogOpen(false)
+      setNewKeyName("")
+      // 显示新创建的 key
+      toast({
+        title: "创建成功",
+        description: `新 API Key: ${data.key}（请妥善保存，仅显示一次）`,
+      })
+    },
+    onError: (error: Error) => {
+      toast({
+        title: "创建失败",
+        description: error.message,
+        variant: "destructive",
+      })
+    },
+  })
+
+  // 删除 API Key
+  const deleteKeyMutation = useMutation({
+    mutationFn: deleteApiKey,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["apiKeys"] })
+      toast({ title: "删除成功", description: "API Key 已删除" })
+    },
+    onError: (error: Error) => {
+      toast({
+        title: "删除失败",
+        description: error.message,
+        variant: "destructive",
+      })
+    },
+  })
+
+  // 复制 API Key
+  const copyApiKey = (key: string) => {
+    navigator.clipboard.writeText(key)
+    toast({ title: "已复制", description: "API Key 已复制到剪贴板" })
+  }
+
+  // 保存代理服务配置
+  const saveProxyConfig = () => {
+    updateMutation.mutate({
+      multiAccountEnabled: localConfig.multiAccountEnabled ?? config?.multiAccountEnabled,
+      maxConcurrent: localConfig.maxConcurrent ?? config?.maxConcurrent,
+      autoSwitchOnQuotaExhausted: localConfig.autoSwitchOnQuotaExhausted ?? config?.autoSwitchOnQuotaExhausted,
+    })
+  }
+
+  // 保存限流配置
+  const saveRateLimitConfig = () => {
+    updateMutation.mutate({
+      rateLimitEnabled: localConfig.rateLimitEnabled ?? config?.rateLimitEnabled,
+      rateLimitMax: localConfig.rateLimitMax ?? config?.rateLimitMax,
+      rateLimitWindow: localConfig.rateLimitWindow ?? config?.rateLimitWindow,
+    })
+  }
+
+  // 保存 Token 刷新配置
+  const saveTokenConfig = () => {
+    updateMutation.mutate({
+      tokenRefreshAdvance: localConfig.tokenRefreshAdvance ?? config?.tokenRefreshAdvance,
+      maxRetries: localConfig.maxRetries ?? config?.maxRetries,
+      retryDelay: localConfig.retryDelay ?? config?.retryDelay,
+    })
+  }
+
+  // 保存账号池配置
+  const savePoolConfig = () => {
+    updateMutation.mutate({
+      errorCooldownTime: localConfig.errorCooldownTime ?? config?.errorCooldownTime,
+      maxConsecutiveErrors: localConfig.maxConsecutiveErrors ?? config?.maxConsecutiveErrors,
+      quotaResetTime: localConfig.quotaResetTime ?? config?.quotaResetTime,
+    })
+  }
+
+  // 保存高级配置
+  const saveAdvancedConfig = () => {
+    updateMutation.mutate({
+      disableToolCalls: localConfig.disableToolCalls ?? config?.disableToolCalls,
+      toolCallAutoRounds: localConfig.toolCallAutoRounds ?? config?.toolCallAutoRounds,
+      preferredEndpoint: localConfig.preferredEndpoint ?? config?.preferredEndpoint,
+      enableRequestLogging: localConfig.enableRequestLogging ?? config?.enableRequestLogging,
+    })
+  }
+
+  // 格式化日期
+  const formatDate = (timestamp?: number) => {
+    if (!timestamp) return "-"
+    return new Date(timestamp).toLocaleString("zh-CN")
+  }
+
+  if (configLoading) {
+    return <div className="py-8 text-center">加载中...</div>
+  }
+
+  return (
+    <div className="space-y-6">
+      {/* 页面标题 */}
+      <div>
+        <h2 className="text-2xl font-bold tracking-tight">系统配置</h2>
+        <p className="text-muted-foreground">
+          管理 API Key、限流和其他系统设置
+        </p>
+      </div>
+
+      <Tabs defaultValue="apikeys" className="space-y-4">
+        <TabsList>
+          <TabsTrigger value="apikeys">API Keys</TabsTrigger>
+          <TabsTrigger value="proxy">代理服务</TabsTrigger>
+          <TabsTrigger value="ratelimit">限流配置</TabsTrigger>
+          <TabsTrigger value="token">Token刷新</TabsTrigger>
+          <TabsTrigger value="pool">账号池</TabsTrigger>
+          <TabsTrigger value="advanced">高级配置</TabsTrigger>
+        </TabsList>
+
+        {/* API Keys 管理 */}
+        <TabsContent value="apikeys">
+          <Card>
+            <CardHeader className="flex flex-row items-center justify-between">
+              <div>
+                <CardTitle>API Key 管理</CardTitle>
+                <CardDescription>
+                  用于访问网关 API 的认证密钥
+                </CardDescription>
+              </div>
+              <Dialog open={isAddKeyDialogOpen} onOpenChange={setIsAddKeyDialogOpen}>
+                <DialogTrigger asChild>
+                  <Button>
+                    <Plus className="mr-2 h-4 w-4" />
+                    创建 API Key
+                  </Button>
+                </DialogTrigger>
+                <DialogContent>
+                  <DialogHeader>
+                    <DialogTitle>创建新 API Key</DialogTitle>
+                    <DialogDescription>
+                      为 API Key 设置一个名称以便识别
+                    </DialogDescription>
+                  </DialogHeader>
+                  <div className="grid gap-4 py-4">
+                    <div className="grid gap-2">
+                      <Label htmlFor="keyName">名称</Label>
+                      <Input
+                        id="keyName"
+                        placeholder="例如：生产环境"
+                        value={newKeyName}
+                        onChange={(e) => setNewKeyName(e.target.value)}
+                      />
+                    </div>
+                  </div>
+                  <DialogFooter>
+                    <Button
+                      variant="outline"
+                      onClick={() => setIsAddKeyDialogOpen(false)}
+                    >
+                      取消
+                    </Button>
+                    <Button
+                      onClick={() => createKeyMutation.mutate({ name: newKeyName })}
+                      disabled={!newKeyName || createKeyMutation.isPending}
+                    >
+                      {createKeyMutation.isPending ? "创建中..." : "创建"}
+                    </Button>
+                  </DialogFooter>
+                </DialogContent>
+              </Dialog>
+            </CardHeader>
+            <CardContent>
+              {keysLoading ? (
+                <div className="py-4 text-center">加载中...</div>
+              ) : apiKeys?.length === 0 ? (
+                <div className="py-4 text-center text-muted-foreground">
+                  暂无 API Key，点击上方按钮创建
+                </div>
+              ) : (
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>名称</TableHead>
+                      <TableHead>Key 预览</TableHead>
+                      <TableHead>创建时间</TableHead>
+                      <TableHead>最后使用</TableHead>
+                      <TableHead className="text-right">操作</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {apiKeys?.map((apiKey) => (
+                      <TableRow key={apiKey.id}>
+                        <TableCell className="font-medium">{apiKey.name}</TableCell>
+                        <TableCell className="font-mono">
+                          {apiKey.keyPreview || apiKey.key?.slice(0, 8) + "..."}
+                        </TableCell>
+                        <TableCell>{formatDate(apiKey.createdAt)}</TableCell>
+                        <TableCell>{formatDate(apiKey.lastUsed)}</TableCell>
+                        <TableCell className="text-right">
+                          <div className="flex justify-end gap-2">
+                            {/* 复制完整 API Key */}
+                            {apiKey.key && (
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                onClick={() => copyApiKey(apiKey.key!)}
+                                title="复制完整 Key"
+                              >
+                                <Copy className="h-4 w-4" />
+                              </Button>
+                            )}
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              onClick={() => {
+                                if (confirm("确定要删除此 API Key 吗？")) {
+                                  deleteKeyMutation.mutate(apiKey.id)
+                                }
+                              }}
+                              disabled={deleteKeyMutation.isPending}
+                              title="删除"
+                            >
+                              <Trash2 className="h-4 w-4 text-destructive" />
+                            </Button>
+                          </div>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              )}
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        {/* 代理服务配置 */}
+        <TabsContent value="proxy">
+          <Card>
+            <CardHeader>
+              <CardTitle>代理服务配置</CardTitle>
+              <CardDescription>
+                代理服务已集成在主服务中，访问地址为 http://localhost:3000/v1/*
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-6">
+              {/* 并发配置 */}
+              <div className="grid gap-4 md:grid-cols-2">
+                <div className="space-y-2">
+                  <Label htmlFor="maxConcurrent">最大并发数</Label>
+                  <Input
+                    id="maxConcurrent"
+                    type="number"
+                    value={localConfig.maxConcurrent ?? config?.maxConcurrent ?? 10}
+                    onChange={(e) =>
+                      setLocalConfig({
+                        ...localConfig,
+                        maxConcurrent: parseInt(e.target.value),
+                      })
+                    }
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    同时处理的最大请求数，默认 10
+                  </p>
+                </div>
+              </div>
+
+              {/* 开关配置 */}
+              <div className="space-y-4">
+                <div className="flex items-center justify-between">
+                  <div className="space-y-0.5">
+                    <Label>启用多账号轮询</Label>
+                    <p className="text-sm text-muted-foreground">
+                      开启后将在多个账号之间轮询分配请求
+                    </p>
+                  </div>
+                  <Switch
+                    checked={localConfig.multiAccountEnabled ?? config?.multiAccountEnabled ?? false}
+                    onCheckedChange={(checked) =>
+                      setLocalConfig({ ...localConfig, multiAccountEnabled: checked })
+                    }
+                  />
+                </div>
+
+                <div className="flex items-center justify-between">
+                  <div className="space-y-0.5">
+                    <Label>额度耗尽自动切换</Label>
+                    <p className="text-sm text-muted-foreground">
+                      当前账号额度耗尽时自动切换到下一个账号
+                    </p>
+                  </div>
+                  <Switch
+                    checked={localConfig.autoSwitchOnQuotaExhausted ?? config?.autoSwitchOnQuotaExhausted ?? false}
+                    onCheckedChange={(checked) =>
+                      setLocalConfig({ ...localConfig, autoSwitchOnQuotaExhausted: checked })
+                    }
+                  />
+                </div>
+              </div>
+
+              <Button
+                onClick={saveProxyConfig}
+                disabled={updateMutation.isPending}
+              >
+                <Save className="mr-2 h-4 w-4" />
+                {updateMutation.isPending ? "保存中..." : "保存配置"}
+              </Button>
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        {/* 限流配置 */}
+        <TabsContent value="ratelimit">
+          <Card>
+            <CardHeader>
+              <CardTitle>限流配置</CardTitle>
+              <CardDescription>
+                配置 API 请求频率限制
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-6">
+              <div className="flex items-center justify-between">
+                <div className="space-y-0.5">
+                  <Label>启用限流</Label>
+                  <p className="text-sm text-muted-foreground">
+                    开启后将限制 API 请求频率
+                  </p>
+                </div>
+                <Switch
+                  checked={localConfig.rateLimitEnabled ?? config?.rateLimitEnabled}
+                  onCheckedChange={(checked) =>
+                    setLocalConfig({ ...localConfig, rateLimitEnabled: checked })
+                  }
+                />
+              </div>
+
+              <div className="grid gap-4 md:grid-cols-2">
+                <div className="space-y-2">
+                  <Label htmlFor="rateLimitMax">最大请求数</Label>
+                  <Input
+                    id="rateLimitMax"
+                    type="number"
+                    value={localConfig.rateLimitMax ?? config?.rateLimitMax ?? 100}
+                    onChange={(e) =>
+                      setLocalConfig({
+                        ...localConfig,
+                        rateLimitMax: parseInt(e.target.value),
+                      })
+                    }
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    时间窗口内允许的最大请求数
+                  </p>
+                </div>
+
+                <div className="space-y-2">
+                  <Label htmlFor="rateLimitWindow">时间窗口 (毫秒)</Label>
+                  <Input
+                    id="rateLimitWindow"
+                    type="number"
+                    value={localConfig.rateLimitWindow ?? config?.rateLimitWindow ?? 60000}
+                    onChange={(e) =>
+                      setLocalConfig({
+                        ...localConfig,
+                        rateLimitWindow: parseInt(e.target.value),
+                      })
+                    }
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    限流时间窗口，默认 60000ms (1分钟)
+                  </p>
+                </div>
+              </div>
+
+              <Button
+                onClick={saveRateLimitConfig}
+                disabled={updateMutation.isPending}
+              >
+                <Save className="mr-2 h-4 w-4" />
+                {updateMutation.isPending ? "保存中..." : "保存配置"}
+              </Button>
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        {/* Token刷新配置 */}
+        <TabsContent value="token">
+          <Card>
+            <CardHeader>
+              <CardTitle>Token刷新配置</CardTitle>
+              <CardDescription>
+                配置 Token 自动刷新的相关参数
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-6">
+              <div className="grid gap-4 md:grid-cols-2">
+                <div className="space-y-2">
+                  <Label htmlFor="tokenRefreshAdvance">Token刷新提前量 (秒)</Label>
+                  <Input
+                    id="tokenRefreshAdvance"
+                    type="number"
+                    value={localConfig.tokenRefreshAdvance ?? config?.tokenRefreshAdvance ?? 300}
+                    onChange={(e) =>
+                      setLocalConfig({
+                        ...localConfig,
+                        tokenRefreshAdvance: parseInt(e.target.value),
+                      })
+                    }
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    Token 过期前多少秒开始刷新，默认 300 秒
+                  </p>
+                </div>
+
+                <div className="space-y-2">
+                  <Label htmlFor="maxRetries">最大重试次数</Label>
+                  <Input
+                    id="maxRetries"
+                    type="number"
+                    value={localConfig.maxRetries ?? config?.maxRetries ?? 3}
+                    onChange={(e) =>
+                      setLocalConfig({
+                        ...localConfig,
+                        maxRetries: parseInt(e.target.value),
+                      })
+                    }
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    Token 刷新失败时的最大重试次数，默认 3 次
+                  </p>
+                </div>
+
+                <div className="space-y-2">
+                  <Label htmlFor="retryDelay">重试延迟 (毫秒)</Label>
+                  <Input
+                    id="retryDelay"
+                    type="number"
+                    value={localConfig.retryDelay ?? config?.retryDelay ?? 1000}
+                    onChange={(e) =>
+                      setLocalConfig({
+                        ...localConfig,
+                        retryDelay: parseInt(e.target.value),
+                      })
+                    }
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    重试之间的等待时间，默认 1000 毫秒
+                  </p>
+                </div>
+              </div>
+
+              <Button
+                onClick={saveTokenConfig}
+                disabled={updateMutation.isPending}
+              >
+                <Save className="mr-2 h-4 w-4" />
+                {updateMutation.isPending ? "保存中..." : "保存配置"}
+              </Button>
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        {/* 账号池配置 */}
+        <TabsContent value="pool">
+          <Card>
+            <CardHeader>
+              <CardTitle>账号池配置</CardTitle>
+              <CardDescription>
+                配置账号池的错误处理和配额管理
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-6">
+              <div className="grid gap-4 md:grid-cols-2">
+                <div className="space-y-2">
+                  <Label htmlFor="errorCooldownTime">错误冷却时间 (毫秒)</Label>
+                  <Input
+                    id="errorCooldownTime"
+                    type="number"
+                    value={localConfig.errorCooldownTime ?? config?.errorCooldownTime ?? 60000}
+                    onChange={(e) =>
+                      setLocalConfig({
+                        ...localConfig,
+                        errorCooldownTime: parseInt(e.target.value),
+                      })
+                    }
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    账号出错后的冷却时间，默认 60000 毫秒 (1分钟)
+                  </p>
+                </div>
+
+                <div className="space-y-2">
+                  <Label htmlFor="maxConsecutiveErrors">最大连续错误次数</Label>
+                  <Input
+                    id="maxConsecutiveErrors"
+                    type="number"
+                    value={localConfig.maxConsecutiveErrors ?? config?.maxConsecutiveErrors ?? 3}
+                    onChange={(e) =>
+                      setLocalConfig({
+                        ...localConfig,
+                        maxConsecutiveErrors: parseInt(e.target.value),
+                      })
+                    }
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    账号连续出错多少次后暂停使用，默认 3 次
+                  </p>
+                </div>
+
+                <div className="space-y-2">
+                  <Label htmlFor="quotaResetTime">配额重置时间 (毫秒)</Label>
+                  <Input
+                    id="quotaResetTime"
+                    type="number"
+                    value={localConfig.quotaResetTime ?? config?.quotaResetTime ?? 3600000}
+                    onChange={(e) =>
+                      setLocalConfig({
+                        ...localConfig,
+                        quotaResetTime: parseInt(e.target.value),
+                      })
+                    }
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    配额重置的时间间隔，默认 3600000 毫秒 (1小时)
+                  </p>
+                </div>
+              </div>
+
+              <Button
+                onClick={savePoolConfig}
+                disabled={updateMutation.isPending}
+              >
+                <Save className="mr-2 h-4 w-4" />
+                {updateMutation.isPending ? "保存中..." : "保存配置"}
+              </Button>
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        {/* 高级配置 */}
+        <TabsContent value="advanced">
+          <Card>
+            <CardHeader>
+              <CardTitle>高级配置</CardTitle>
+              <CardDescription>
+                配置工具调用、端点选择和日志记录
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-6">
+              {/* 开关配置 */}
+              <div className="space-y-4">
+                <div className="flex items-center justify-between">
+                  <div className="space-y-0.5">
+                    <Label>禁用工具调用</Label>
+                    <p className="text-sm text-muted-foreground">
+                      禁用 AI 模型的工具调用功能
+                    </p>
+                  </div>
+                  <Switch
+                    checked={localConfig.disableToolCalls ?? config?.disableToolCalls ?? false}
+                    onCheckedChange={(checked) =>
+                      setLocalConfig({ ...localConfig, disableToolCalls: checked })
+                    }
+                  />
+                </div>
+
+                <div className="flex items-center justify-between">
+                  <div className="space-y-0.5">
+                    <Label>记录请求日志</Label>
+                    <p className="text-sm text-muted-foreground">
+                      记录所有 API 请求的详细日志
+                    </p>
+                  </div>
+                  <Switch
+                    checked={localConfig.enableRequestLogging ?? config?.enableRequestLogging ?? false}
+                    onCheckedChange={(checked) =>
+                      setLocalConfig({ ...localConfig, enableRequestLogging: checked })
+                    }
+                  />
+                </div>
+              </div>
+
+              {/* 数值和选择配置 */}
+              <div className="grid gap-4 md:grid-cols-2">
+                <div className="space-y-2">
+                  <Label htmlFor="toolCallAutoRounds">工具调用自动继续轮数</Label>
+                  <Input
+                    id="toolCallAutoRounds"
+                    type="number"
+                    value={localConfig.toolCallAutoRounds ?? config?.toolCallAutoRounds ?? 0}
+                    onChange={(e) =>
+                      setLocalConfig({
+                        ...localConfig,
+                        toolCallAutoRounds: parseInt(e.target.value),
+                      })
+                    }
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    工具调用后自动继续的轮数，0 表示不自动继续
+                  </p>
+                </div>
+
+                <div className="space-y-2">
+                  <Label htmlFor="preferredEndpoint">首选端点</Label>
+                  <Select
+                    value={localConfig.preferredEndpoint ?? config?.preferredEndpoint ?? "codewhisperer"}
+                    onValueChange={(value: 'codewhisperer' | 'amazonq') =>
+                      setLocalConfig({
+                        ...localConfig,
+                        preferredEndpoint: value,
+                      })
+                    }
+                  >
+                    <SelectTrigger id="preferredEndpoint">
+                      <SelectValue placeholder="选择首选端点" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="codewhisperer">CodeWhisperer</SelectItem>
+                      <SelectItem value="amazonq">Amazon Q</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  <p className="text-xs text-muted-foreground">
+                    优先使用的 API 端点
+                  </p>
+                </div>
+              </div>
+
+              <Button
+                onClick={saveAdvancedConfig}
+                disabled={updateMutation.isPending}
+              >
+                <Save className="mr-2 h-4 w-4" />
+                {updateMutation.isPending ? "保存中..." : "保存配置"}
+              </Button>
+            </CardContent>
+          </Card>
+        </TabsContent>
+      </Tabs>
+    </div>
+  )
+}

@@ -1,0 +1,22 @@
+{
+  "name": "kiro-gateway-monorepo",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Kiro API Gateway Monorepo",
+  "scripts": {
+    "dev:backend": "pnpm --filter @kiro-gateway/backend dev",
+    "dev:frontend": "pnpm --filter @kiro-gateway/frontend dev",
+    "build": "pnpm -r build",
+    "build:backend": "pnpm --filter @kiro-gateway/backend build",
+    "build:frontend": "pnpm --filter @kiro-gateway/frontend build",
+    "lint": "pnpm -r lint",
+    "typecheck": "pnpm -r typecheck"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "packageManager": "pnpm@9.0.0",
+  "dependencies": {
+    "nodemon": "^3.1.11"
+  }
+}

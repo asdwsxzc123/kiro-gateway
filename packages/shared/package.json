@@ -1,0 +1,15 @@
+{
+  "name": "@kiro-gateway/shared",
+  "version": "1.0.0",
+  "description": "Shared types for Kiro Gateway",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.3"
+  },
+  "license": "AGPL-3.0"
+}
