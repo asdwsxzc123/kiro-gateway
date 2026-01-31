@@ -286,6 +286,98 @@ export interface UpdateAccountRequest {
   expiresAt?: number
 }
 
+// ============ 代理服务配置 ============
+
+export interface ProxyConfig {
+  // 基础配置
+  enabled: boolean
+  port: number
+  host: string
+
+  // 账号配置
+  enableMultiAccount: boolean
+  selectedAccountIds: string[]
+  autoSwitchOnQuotaExhausted?: boolean
+
+  // 请求配置
+  logRequests: boolean
+  maxConcurrent: number
+  maxRetries: number
+  retryDelayMs: number
+  requestTimeout?: number
+
+  // Token 刷新配置
+  tokenRefreshBeforeExpiry: number  // 提前刷新时间（秒）
+  autoStart: boolean
+
+  // Thinking 模式配置
+  modelThinkingMode?: Record<string, boolean>  // 按模型启用 thinking
+  thinkingOutputFormat?: 'thinking' | 'think' | 'reasoning_content'
+
+  // 自动继续配置
+  autoContinueRounds?: number  // 自动继续轮数
+
+  // 工具配置
+  disableTools?: boolean  // 禁用工具调用
+
+  // API Key 配置
+  apiKey?: string  // 兼容旧的单 API Key
+  apiKeys?: ApiKey[]  // 多 API Key 支持
+
+  // TLS 配置
+  tls?: {
+    enabled: boolean
+    cert?: string
+    key?: string
+    certPath?: string
+    keyPath?: string
+  }
+
+  // 端点偏好
+  preferredEndpoint?: 'codewhisperer' | 'amazonq'
+}
+
+// API Key 定义（带用量统计）
+export interface ApiKey {
+  id: string
+  key: string
+  name: string
+  enabled: boolean
+  createdAt: number
+  lastUsedAt?: number
+  creditsLimit?: number  // 额度限制
+
+  // 用量统计
+  usage: {
+    totalRequests: number
+    totalCredits: number
+    totalInputTokens: number
+    totalOutputTokens: number
+    daily: Record<string, {
+      requests: number
+      credits: number
+      inputTokens: number
+      outputTokens: number
+    }>
+    byModel?: Record<string, {
+      requests: number
+      credits: number
+      inputTokens: number
+      outputTokens: number
+    }>
+  }
+
+  // 用量历史（最近 100 条）
+  usageHistory?: Array<{
+    timestamp: number
+    model: string
+    inputTokens: number
+    outputTokens: number
+    credits: number
+    path: string
+  }>
+}
+
 // ============ 统计类型 ============
 
 export interface ProxyStats {
@@ -297,6 +389,11 @@ export interface ProxyStats {
   inputTokens: number
   outputTokens: number
   startTime: number
+  // 扩展统计
+  accountStats: Map<string, AccountStats>
+  endpointStats: Map<string, EndpointStats>
+  modelStats: Map<string, ModelStats>
+  recentRequests: RequestLog[]
 }
 
 export interface AccountStats {

@@ -5,7 +5,19 @@
 
 import { getRedisClient } from './redis.js'
 import { createLogger } from '../utils/logger.js'
-import type { ProxyStats, AccountStats, ModelStats } from '../core/types.js'
+import type { AccountStats, ModelStats } from '../core/types.js'
+
+// Redis 存储的全局统计类型（简化版，不包含 Map 类型）
+export interface GlobalStats {
+  totalRequests: number
+  successRequests: number
+  failedRequests: number
+  totalTokens: number
+  totalCredits: number
+  inputTokens: number
+  outputTokens: number
+  startTime: number
+}
 
 const logger = createLogger('StatsStore')
 
@@ -17,7 +29,7 @@ const MODEL_STATS_PREFIX = 'stats:model:'
 /**
  * 获取全局统计
  */
-export async function getGlobalStats(): Promise<ProxyStats> {
+export async function getGlobalStats(): Promise<GlobalStats> {
   const redis = getRedisClient()
 
   try {

@@ -4,14 +4,15 @@
  */
 
 import * as statsStore from '../storage/statsStore.js'
+import type { GlobalStats } from '../storage/statsStore.js'
 import * as accountStore from '../storage/accountStore.js'
 import { createLogger } from '../utils/logger.js'
-import type { ProxyStats, AccountStats, ModelStats } from '../core/types.js'
+import type { AccountStats, ModelStats } from '../core/types.js'
 
 const logger = createLogger('StatsService')
 
 export interface StatsOverview {
-  global: ProxyStats
+  global: GlobalStats
   accounts: {
     total: number
     available: number
@@ -40,7 +41,7 @@ export async function getStatsOverview(): Promise<StatsOverview> {
 /**
  * 获取全局统计
  */
-export async function getGlobalStats(): Promise<ProxyStats> {
+export async function getGlobalStats(): Promise<GlobalStats> {
   return statsStore.getGlobalStats()
 }
 

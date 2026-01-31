@@ -128,27 +128,43 @@ export async function handleOpenAIStreamRequest(
     accountId: selectedAccount.id
   })
 
+  logger.debug('OpenAI stream request details', {
+    streamId,
+    messagesCount: request.messages.length,
+    hasTools: !!request.tools?.length,
+    maxTokens: request.max_tokens
+  })
+
   try {
     const payload = openaiToKiro(request, selectedAccount.profileArn)
+    logger.debug('Kiro payload prepared', { streamId, payloadSize: JSON.stringify(payload).length })
 
     // 发送初始 role chunk
     const initialChunk = createOpenaiStreamChunk(streamId, request.model, { role: 'assistant' })
     callbacks.onChunk(`data: ${JSON.stringify(initialChunk)}\n\n`)
+    logger.debug('Initial role chunk sent', { streamId })
 
     const toolUses: KiroToolUse[] = []
     let toolCallIndex = 0
+
+    let chunkCount = 0
+    let totalTextLength = 0
 
     await callKiroApiStream(
       selectedAccount,
       payload,
       (text, toolUse) => {
         if (text) {
+          chunkCount++
+          totalTextLength += text.length
           const chunk = createOpenaiStreamChunk(streamId, request.model, { content: text })
           callbacks.onChunk(`data: ${JSON.stringify(chunk)}\n\n`)
+          logger.debug('OpenAI text chunk sent', { streamId, chunkIndex: chunkCount, textLength: text.length })
         }
 
         if (toolUse) {
           toolUses.push(toolUse)
+          logger.debug('OpenAI tool use received', { streamId, toolName: toolUse.name, toolUseId: toolUse.toolUseId })
           // 发送 tool call chunk
           const toolChunk = createOpenaiStreamChunk(streamId, request.model, {
             tool_calls: [{
@@ -162,11 +178,20 @@ export async function handleOpenAIStreamRequest(
             }]
           })
           callbacks.onChunk(`data: ${JSON.stringify(toolChunk)}\n\n`)
+          logger.debug('OpenAI tool call chunk sent', { streamId, toolCallIndex })
           toolCallIndex++
         }
       },
       async (usage) => {
         const responseTime = Date.now() - startTime
+
+        logger.debug('OpenAI stream completing', {
+          streamId,
+          totalChunks: chunkCount,
+          totalTextLength,
+          toolUsesCount: toolUses.length,
+          responseTime
+        })
 
         // 发送完成 chunk
         const finishReason = toolUses.length > 0 ? 'tool_calls' : 'stop'
@@ -178,12 +203,22 @@ export async function handleOpenAIStreamRequest(
         callbacks.onChunk(`data: ${JSON.stringify(finalChunk)}\n\n`)
         callbacks.onChunk('data: [DONE]\n\n')
 
+        logger.debug('OpenAI stream completed', {
+          streamId,
+          finishReason,
+          inputTokens: usage.inputTokens,
+          outputTokens: usage.outputTokens,
+          credits: usage.credits
+        })
+
         await updateStats(selectedAccount.id, true, usage, responseTime, request.model, '/v1/chat/completions', selectedAccount.machineId)
         callbacks.onComplete(usage)
       },
       async (error) => {
         const responseTime = Date.now() - startTime
         const errorMessage = error.message
+
+        logger.debug('OpenAI stream error', { streamId, errorMessage, responseTime, chunksBeforeError: chunkCount })
 
         if (errorMessage.includes('Quota exhausted') || errorMessage.includes('429')) {
           await accountService.setAccountCooldown(selectedAccount.id, 60000)
@@ -285,8 +320,17 @@ export async function handleClaudeStreamRequest(
     accountId: selectedAccount.id
   })
 
+  logger.debug('Claude stream request details', {
+    messageId,
+    messagesCount: request.messages.length,
+    hasTools: !!request.tools?.length,
+    hasSystem: !!request.system,
+    maxTokens: request.max_tokens
+  })
+
   try {
     const payload = claudeToKiro(request, selectedAccount.profileArn)
+    logger.debug('Kiro payload prepared for Claude', { messageId, payloadSize: JSON.stringify(payload).length })
 
     // 发送 message_start 事件
     const messageStart = createClaudeStreamEvent('message_start', {
@@ -302,6 +346,7 @@ export async function handleClaudeStreamRequest(
       }
     })
     callbacks.onChunk(`event: message_start\ndata: ${JSON.stringify(messageStart)}\n\n`)
+    logger.debug('Claude message_start sent', { messageId })
 
     // 发送 content_block_start
     const blockStart = createClaudeStreamEvent('content_block_start', {
@@ -309,31 +354,47 @@ export async function handleClaudeStreamRequest(
       content_block: { type: 'text', text: '' }
     })
     callbacks.onChunk(`event: content_block_start\ndata: ${JSON.stringify(blockStart)}\n\n`)
+    logger.debug('Claude content_block_start sent', { messageId, blockIndex: 0 })
 
     const toolUses: KiroToolUse[] = []
+    let chunkCount = 0
+    let totalTextLength = 0
 
     await callKiroApiStream(
       selectedAccount,
       payload,
       (text, toolUse) => {
         if (text) {
+          chunkCount++
+          totalTextLength += text.length
           const delta = createClaudeStreamEvent('content_block_delta', {
             index: 0,
             delta: { type: 'text_delta', text }
           })
           callbacks.onChunk(`event: content_block_delta\ndata: ${JSON.stringify(delta)}\n\n`)
+          logger.debug('Claude text_delta sent', { messageId, chunkIndex: chunkCount, textLength: text.length })
         }
 
         if (toolUse) {
           toolUses.push(toolUse)
+          logger.debug('Claude tool use received', { messageId, toolName: toolUse.name, toolUseId: toolUse.toolUseId })
         }
       },
       async (usage) => {
         const responseTime = Date.now() - startTime
 
+        logger.debug('Claude stream completing', {
+          messageId,
+          totalChunks: chunkCount,
+          totalTextLength,
+          toolUsesCount: toolUses.length,
+          responseTime
+        })
+
         // 发送 content_block_stop
         const blockStop = createClaudeStreamEvent('content_block_stop', { index: 0 })
         callbacks.onChunk(`event: content_block_stop\ndata: ${JSON.stringify(blockStop)}\n\n`)
+        logger.debug('Claude content_block_stop sent', { messageId, blockIndex: 0 })
 
         // 发送 tool_use blocks
         for (let i = 0; i < toolUses.length; i++) {
@@ -343,9 +404,11 @@ export async function handleClaudeStreamRequest(
             content_block: { type: 'tool_use', id: tu.toolUseId, name: tu.name, input: tu.input }
           })
           callbacks.onChunk(`event: content_block_start\ndata: ${JSON.stringify(toolBlockStart)}\n\n`)
+          logger.debug('Claude tool_use block_start sent', { messageId, blockIndex: i + 1, toolName: tu.name })
 
           const toolBlockStop = createClaudeStreamEvent('content_block_stop', { index: i + 1 })
           callbacks.onChunk(`event: content_block_stop\ndata: ${JSON.stringify(toolBlockStop)}\n\n`)
+          logger.debug('Claude tool_use block_stop sent', { messageId, blockIndex: i + 1 })
         }
 
         // 发送 message_delta
@@ -355,10 +418,19 @@ export async function handleClaudeStreamRequest(
           usage: { output_tokens: usage.outputTokens }
         })
         callbacks.onChunk(`event: message_delta\ndata: ${JSON.stringify(messageDelta)}\n\n`)
+        logger.debug('Claude message_delta sent', { messageId, stopReason })
 
         // 发送 message_stop
         const messageStop = createClaudeStreamEvent('message_stop')
         callbacks.onChunk(`event: message_stop\ndata: ${JSON.stringify(messageStop)}\n\n`)
+
+        logger.debug('Claude stream completed', {
+          messageId,
+          stopReason,
+          inputTokens: usage.inputTokens,
+          outputTokens: usage.outputTokens,
+          credits: usage.credits
+        })
 
         await updateStats(selectedAccount.id, true, usage, responseTime, request.model, '/v1/messages', selectedAccount.machineId)
         callbacks.onComplete(usage)
@@ -366,6 +438,8 @@ export async function handleClaudeStreamRequest(
       async (error) => {
         const responseTime = Date.now() - startTime
         const errorMessage = error.message
+
+        logger.debug('Claude stream error', { messageId, errorMessage, responseTime, chunksBeforeError: chunkCount })
 
         if (errorMessage.includes('Quota exhausted') || errorMessage.includes('429')) {
           await accountService.setAccountCooldown(selectedAccount.id, 60000)
@@ -378,6 +452,7 @@ export async function handleClaudeStreamRequest(
           error: { type: 'api_error', message: errorMessage }
         })
         callbacks.onChunk(`event: error\ndata: ${JSON.stringify(errorEvent)}\n\n`)
+        logger.debug('Claude error event sent', { messageId })
         callbacks.onError(error)
       },
       signal

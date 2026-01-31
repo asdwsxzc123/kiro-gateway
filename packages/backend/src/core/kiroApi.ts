@@ -553,6 +553,8 @@ async function parseEventStream(
   let currentToolUse: ToolUseState | null = null
   const processedIds = new Set<string>()
 
+  console.log(`[parseEventStream] 开始 inputChars=${inputChars}`)
+
   try {
     while (true) {
       const { done, value } = await reader.read()
@@ -585,10 +587,13 @@ async function parseEventStream(
             const payloadText = new TextDecoder().decode(payloadBytes)
             const event = JSON.parse(payloadText)
 
+            console.log(`[Event] type=${eventType || 'unknown'} keys=[${Object.keys(event).join(',')}] data=${JSON.stringify(event).slice(0, 200)}`)
+
             // 处理 assistantResponseEvent
             if (eventType === 'assistantResponseEvent' || event.assistantResponseEvent) {
               const assistantResp = event.assistantResponseEvent || event
               const content = assistantResp.content
+              console.log(`[assistantResponse] content=${content?.slice(0, 150)}`)
               if (content) {
                 onChunk(content)
                 totalOutputChars += content.length
@@ -601,6 +606,18 @@ async function parseEventStream(
               const toolUseId = toolUseData.toolUseId
               const toolName = toolUseData.name
               const isStop = toolUseData.stop === true
+
+              // 调试日志：查看原始 toolUseEvent 数据
+              logger.debug('toolUseEvent received', {
+                toolUseId,
+                toolName,
+                isStop,
+                inputType: typeof toolUseData.input,
+                inputValue: typeof toolUseData.input === 'string'
+                  ? toolUseData.input.substring(0, 200)
+                  : JSON.stringify(toolUseData.input)?.substring(0, 200),
+                rawKeys: Object.keys(toolUseData)
+              })
 
               let inputFragment = ''
               let inputObj: Record<string, unknown> | null = null
@@ -634,14 +651,27 @@ async function parseEventStream(
                 }
               }
 
+              // 累积 input 片段
               if (currentToolUse && inputFragment) {
                 currentToolUse.inputBuffer += inputFragment
+                logger.debug('toolUse input fragment accumulated', {
+                  toolUseId: currentToolUse.toolUseId,
+                  fragmentLength: inputFragment.length,
+                  bufferLength: currentToolUse.inputBuffer.length
+                })
               }
 
+              // 处理完整的 input 对象
               if (currentToolUse && inputObj) {
                 currentToolUse.inputBuffer = JSON.stringify(inputObj)
+                logger.debug('toolUse input object set', {
+                  toolUseId: currentToolUse.toolUseId,
+                  inputObjKeys: Object.keys(inputObj),
+                  bufferLength: currentToolUse.inputBuffer.length
+                })
               }
 
+              // 处理 stop 事件，输出最终的 tool use
               if (isStop && currentToolUse) {
                 let finalInput: Record<string, unknown> = {}
                 try {
@@ -654,6 +684,14 @@ async function parseEventStream(
                     _partialInput: currentToolUse.inputBuffer?.substring(0, 500) || ''
                   }
                 }
+
+                logger.debug('toolUse completed (stop)', {
+                  toolUseId: currentToolUse.toolUseId,
+                  name: currentToolUse.name,
+                  inputBufferLength: currentToolUse.inputBuffer.length,
+                  finalInputKeys: Object.keys(finalInput),
+                  finalInputPreview: JSON.stringify(finalInput).substring(0, 300)
+                })
 
                 onChunk('', {
                   toolUseId: currentToolUse.toolUseId,
@@ -683,7 +721,8 @@ async function parseEventStream(
                 usage.cacheWriteTokens = cacheWrite
               }
             }
-
+          // 调试：打印所有事件类型（包括常见类型）
+            logger.debug( 'Kiro Event: ' + (eventType || 'unknown') + ' ' + JSON.stringify(event).slice(0, 500))
             // 处理 meteringEvent
             if (eventType === 'meteringEvent' || event.meteringEvent) {
               const metering = event.meteringEvent || event
@@ -819,7 +858,7 @@ async function parseEventStream(
       }
     }
 
-    // 完成未处理的 tool use
+    // 完成未处理的 tool use（流结束但没有收到 stop 事件）
     if (currentToolUse && !processedIds.has(currentToolUse.toolUseId)) {
       let finalInput: Record<string, unknown> = {}
       try {
@@ -827,6 +866,15 @@ async function parseEventStream(
           finalInput = JSON.parse(currentToolUse.inputBuffer)
         }
       } catch { /* ignore */ }
+
+      logger.debug('toolUse completed (stream end, no stop)', {
+        toolUseId: currentToolUse.toolUseId,
+        name: currentToolUse.name,
+        inputBufferLength: currentToolUse.inputBuffer.length,
+        finalInputKeys: Object.keys(finalInput),
+        finalInputPreview: JSON.stringify(finalInput).substring(0, 300)
+      })
+
       onChunk('', {
         toolUseId: currentToolUse.toolUseId,
         name: currentToolUse.name,
@@ -871,6 +919,7 @@ export async function callKiroApiStream(
       }
 
       const payloadStr = JSON.stringify(payload)
+      console.log(`[Request] payloadSize=${payloadStr.length} payload=${payloadStr.slice(0, 200)}`)
       logger.debug(`Request to ${endpoint.name}`, {
         contentLength: payload.conversationState.currentMessage.userInputMessage?.content?.length || 0,
         toolsCount: payload.conversationState.currentMessage.userInputMessage?.userInputMessageContext?.tools?.length || 0,
@@ -878,7 +927,7 @@ export async function callKiroApiStream(
       })
 
       const headers = getAuthHeaders(account, endpoint, skipAgentMode)
-			console.log("TCL: headers", headers)
+      console.log(`[Request] headers=${JSON.stringify(headers).slice(0, 200)}`)
       const response = await fetch(endpoint.url, {
         method: 'POST',
         headers,
@@ -901,6 +950,7 @@ export async function callKiroApiStream(
         const body = await response.text()
         throw new Error(`API error ${response.status}: ${body}`)
       }
+      console.log(`[Response] status=${response.status} ok=${response.ok}`)
 
       const inputChars = payloadStr.length
       await parseEventStream(response.body!, onChunk, onComplete, onError, inputChars)
