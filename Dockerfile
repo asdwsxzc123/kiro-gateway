@@ -21,6 +21,10 @@ RUN pnpm install
 COPY packages/shared ./packages/shared
 COPY packages/frontend ./packages/frontend
 
+# 构建 shared
+WORKDIR /app/packages/shared
+RUN pnpm build
+
 # 构建前端
 WORKDIR /app/packages/frontend
 RUN pnpm build
@@ -44,6 +48,10 @@ RUN pnpm install
 # 复制源代码
 COPY packages/shared ./packages/shared
 COPY packages/backend ./packages/backend
+
+# 构建 shared
+WORKDIR /app/packages/shared
+RUN pnpm build
 
 # 构建后端
 WORKDIR /app/packages/backend
