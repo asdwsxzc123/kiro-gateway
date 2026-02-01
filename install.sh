@@ -1,14 +1,9 @@
 #!/bin/bash
 
 # Kiro Gateway Installation Script
-# Usage: curl -fsSL https://gitee.com/asdwsxzc123/kiro-gateway/raw/master/install.sh | bash
-# Or: ./install.sh
+# Usage: ./install.sh
 
 set -e
-
-# Configuration
-GIT_REPO="${GIT_REPO:-https://gitee.com/asdwsxzc123/kiro-gateway.git}"
-INSTALL_DIR="${INSTALL_DIR:-$HOME/kiro-gateway}"
 
 # Colors
 RED='\033[0;31m'
@@ -32,6 +27,10 @@ log_error() {
 log_step() {
     echo -e "${BLUE}[STEP]${NC} $1"
 }
+
+# Get script directory
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+cd "$SCRIPT_DIR"
 
 # Check if command exists
 check_command() {
@@ -57,7 +56,6 @@ detect_os() {
 install_docker_debian() {
     log_step "Installing Docker..."
 
-    # Check for sudo privileges
     if [ "$EUID" -ne 0 ]; then
         if ! check_command sudo; then
             log_error "Root privileges required to install Docker. Please run with sudo."
@@ -76,8 +74,7 @@ install_docker_debian() {
         ca-certificates \
         curl \
         gnupg \
-        lsb-release \
-        git
+        lsb-release
 
     log_info "Adding Docker GPG key..."
     $SUDO install -m 0755 -d /etc/apt/keyrings
@@ -98,7 +95,6 @@ install_docker_debian() {
     $SUDO systemctl start docker
     $SUDO systemctl enable docker
 
-    # Add current user to docker group
     if [ "$EUID" -ne 0 ]; then
         log_info "Adding current user to docker group..."
         $SUDO usermod -aG docker $USER
@@ -133,13 +129,11 @@ check_docker() {
     if ! docker info &> /dev/null; then
         log_warn "Docker not running or permission denied"
 
-        # Try to start Docker
         if check_command systemctl; then
             log_info "Attempting to start Docker service..."
             sudo systemctl start docker 2>/dev/null || true
         fi
 
-        # Check again
         if ! docker info &> /dev/null; then
             log_error "Docker not running. Please try:"
             log_info "  1. Run 'sudo systemctl start docker' to start Docker"
@@ -169,65 +163,20 @@ check_docker_compose() {
     log_info "Docker Compose is ready"
 }
 
-# Check Git
-check_git() {
-    log_step "Checking Git..."
-
-    if ! check_command git; then
-        log_warn "Git not installed, installing..."
-
-        detect_os
-
-        case "$OS" in
-            ubuntu|debian)
-                sudo apt-get update -y && sudo apt-get install -y git
-                ;;
-            centos|rhel|fedora)
-                sudo yum install -y git || sudo dnf install -y git
-                ;;
-            *)
-                log_error "Please install Git manually"
-                exit 1
-                ;;
-        esac
-    fi
-
-    log_info "Git is ready"
-}
-
-# Clone or update repository
-clone_or_update_repo() {
-    log_step "Setting up source code..."
-
-    if [ -d "$INSTALL_DIR/.git" ]; then
-        log_info "Repository exists, pulling latest changes..."
-        cd "$INSTALL_DIR"
-        git pull origin master || git pull origin main || true
-    else
-        log_info "Cloning repository..."
-        rm -rf "$INSTALL_DIR"
-        git clone "$GIT_REPO" "$INSTALL_DIR"
-        cd "$INSTALL_DIR"
-    fi
-
-    log_info "Source code ready"
-}
-
 # Generate .env file
 generate_env_file() {
-    log_step "Generating .env configuration file..."
+    log_step "Checking .env configuration..."
 
     if [ -f .env ]; then
-        log_warn ".env file already exists, skipping"
+        log_info ".env file exists, skipping"
         return
     fi
 
-    # Generate random JWT_SECRET
+    log_info "Generating .env file..."
     JWT_SECRET=$(openssl rand -hex 32 2>/dev/null || head -c 64 /dev/urandom | base64 | tr -d '\n' | head -c 64)
 
     cat > .env << EOF
 # Kiro Gateway Configuration
-# Modify as needed
 
 # Service port
 PORT=8000
@@ -235,7 +184,7 @@ PORT=8000
 # Redis port
 REDIS_PORT=16379
 
-# JWT secret (change in production)
+# JWT secret
 JWT_SECRET=${JWT_SECRET}
 
 # Encryption key (optional)
@@ -250,82 +199,7 @@ RATE_LIMIT_MAX_REQUESTS=100
 LOG_LEVEL=info
 EOF
 
-    log_info ".env configuration file generated"
-}
-
-# Generate management script
-generate_manage_script() {
-    log_step "Generating management script..."
-
-    cat > manage.sh << 'EOF'
-#!/bin/bash
-
-# Kiro Gateway Management Script
-
-set -e
-
-cd "$(dirname "$0")"
-
-case "${1:-help}" in
-    start)
-        echo "Starting services..."
-        docker compose up -d
-        docker compose ps
-        ;;
-    stop)
-        echo "Stopping services..."
-        docker compose down
-        ;;
-    restart)
-        echo "Restarting services..."
-        docker compose restart
-        docker compose ps
-        ;;
-    logs)
-        docker compose logs -f --tail=100
-        ;;
-    status)
-        docker compose ps
-        ;;
-    update)
-        echo "Updating..."
-        git pull origin master || git pull origin main || true
-        docker compose down
-        docker compose up -d --build
-        docker compose ps
-        ;;
-    rebuild)
-        echo "Rebuilding..."
-        docker compose down
-        docker compose build --no-cache
-        docker compose up -d
-        docker compose ps
-        ;;
-    uninstall)
-        echo "Uninstalling services..."
-        docker compose down -v
-        echo "Services uninstalled. Configuration files remain in current directory."
-        ;;
-    *)
-        echo "Kiro Gateway Management Script"
-        echo ""
-        echo "Usage: ./manage.sh [command]"
-        echo ""
-        echo "Commands:"
-        echo "  start     Start services"
-        echo "  stop      Stop services"
-        echo "  restart   Restart services"
-        echo "  logs      View logs"
-        echo "  status    View status"
-        echo "  update    Update and rebuild"
-        echo "  rebuild   Force rebuild"
-        echo "  uninstall Uninstall services"
-        ;;
-esac
-EOF
-
-    chmod +x manage.sh
-    log_info "Management script manage.sh generated"
+    log_info ".env file generated"
 }
 
 # Build and start services
@@ -349,49 +223,15 @@ show_complete_info() {
     echo -e "${GREEN}Kiro Gateway Installation Complete!${NC}"
     echo "========================================"
     echo ""
-    echo "Install directory: $INSTALL_DIR"
     echo "Access URL: http://localhost:8000"
     echo ""
-    echo "Management commands:"
-    echo "  cd $INSTALL_DIR"
-    echo "  ./manage.sh start    # Start"
-    echo "  ./manage.sh stop     # Stop"
-    echo "  ./manage.sh logs     # Logs"
-    echo "  ./manage.sh update   # Update"
+    echo "Commands:"
+    echo "  docker compose up -d      # Start"
+    echo "  docker compose down       # Stop"
+    echo "  docker compose logs -f    # Logs"
+    echo "  docker compose up -d --build  # Rebuild"
     echo ""
-    echo "Configuration file: $INSTALL_DIR/.env"
-    echo ""
-}
-
-# Check if already installed
-check_installed() {
-    if [ -d "$INSTALL_DIR/.git" ] && [ -f "$INSTALL_DIR/docker-compose.yml" ]; then
-        return 0
-    fi
-    return 1
-}
-
-# Upgrade services
-upgrade() {
-    log_step "Installation detected, upgrading..."
-    cd "$INSTALL_DIR"
-
-    log_step "Pulling latest code..."
-    git pull origin master || git pull origin main || true
-
-    log_step "Rebuilding and restarting services..."
-    $COMPOSE_CMD down
-    $COMPOSE_CMD up -d --build
-
-    echo ""
-    $COMPOSE_CMD ps
-
-    echo ""
-    echo "========================================"
-    echo -e "${GREEN}Kiro Gateway Upgrade Complete!${NC}"
-    echo "========================================"
-    echo ""
-    echo "Access URL: http://localhost:8000"
+    echo "Configuration: .env"
     echo ""
 }
 
@@ -399,24 +239,20 @@ upgrade() {
 main() {
     echo ""
     echo "========================================"
-    echo "    Kiro Gateway Install/Upgrade Script"
+    echo "    Kiro Gateway Installation Script"
     echo "========================================"
     echo ""
 
-    check_docker
-    check_docker_compose
-    check_git
-
-    # Check if already installed
-    if check_installed; then
-        upgrade
-        exit 0
+    # Check docker-compose.yml exists
+    if [ ! -f "docker-compose.yml" ]; then
+        log_error "docker-compose.yml not found in current directory"
+        log_info "Please run this script from the project root directory"
+        exit 1
     fi
 
-    # Fresh install
-    clone_or_update_repo
+    check_docker
+    check_docker_compose
     generate_env_file
-    generate_manage_script
     build_and_start
     show_complete_info
 }
