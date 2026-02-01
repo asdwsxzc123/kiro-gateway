@@ -76,25 +76,37 @@ logs() {
     docker compose logs -f --tail=100
 }
 
-# 推送到 Docker Hub
+# Push to Docker Hub (multi-platform)
 push() {
     if [ -z "$DOCKER_HUB_USERNAME" ]; then
-        log_error "请设置 DOCKER_HUB_USERNAME 环境变量"
-        log_info "用法: DOCKER_HUB_USERNAME=your-username ./deploy.sh push"
+        log_error "Please set DOCKER_HUB_USERNAME environment variable"
+        log_info "Usage: DOCKER_HUB_USERNAME=your-username ./deploy.sh push"
         exit 1
     fi
 
     FULL_IMAGE_NAME="${DOCKER_HUB_USERNAME}/${IMAGE_NAME}:${IMAGE_TAG}"
 
-    log_info "构建镜像: ${FULL_IMAGE_NAME}"
-    docker build -t "${FULL_IMAGE_NAME}" .
+    log_info "Setting up buildx for multi-platform build..."
 
-    log_info "推送到 Docker Hub..."
-    docker push "${FULL_IMAGE_NAME}"
+    # Create buildx builder if not exists
+    if ! docker buildx inspect multiplatform-builder &> /dev/null; then
+        docker buildx create --name multiplatform-builder --use
+    else
+        docker buildx use multiplatform-builder
+    fi
 
-    log_info "镜像已推送: ${FULL_IMAGE_NAME}"
+    log_info "Building multi-platform image: ${FULL_IMAGE_NAME}"
+    log_info "Platforms: linux/amd64, linux/arm64"
+
+    docker buildx build \
+        --platform linux/amd64,linux/arm64 \
+        -t "${FULL_IMAGE_NAME}" \
+        --push \
+        .
+
+    log_info "Image pushed: ${FULL_IMAGE_NAME}"
     echo ""
-    echo "其他用户可以通过以下命令拉取:"
+    echo "Users can pull with:"
     echo "  docker pull ${FULL_IMAGE_NAME}"
 }
 
