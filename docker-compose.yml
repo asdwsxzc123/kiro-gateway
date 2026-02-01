@@ -15,7 +15,7 @@ services:
       NODE_ENV: production
       PORT: "8000"
       HOST: 0.0.0.0
-      REDIS_URL: redis://redis:6379
+      REDIS_URL: redis://redis:16999
       REDIS_DB: "0"
       REDIS_KEY_PREFIX: "gateway:"
       ENCRYPTION_KEY: ${ENCRYPTION_KEY:-""}

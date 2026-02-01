@@ -46,7 +46,7 @@ npm start
 |--------|--------|------|
 | PORT | 3000 | 服务端口 |
 | HOST | 0.0.0.0 | 监听地址 |
-| REDIS_URL | redis://localhost:6379 | Redis 连接地址 |
+| REDIS_URL | redis://localhost:16999 | Redis 连接地址 |
 | REDIS_PASSWORD | - | Redis 密码 |
 | REDIS_DB | 0 | Redis 数据库 |
 | REDIS_KEY_PREFIX | gateway: | Redis Key 前缀 |

@@ -11,7 +11,7 @@ export const DEFAULT_SERVER_CONFIG = {
 
 // Redis 默认配置1
 export const DEFAULT_REDIS_CONFIG = {
-  url: 'redis://localhost:6379',
+  url: 'redis://localhost:16999',
   password: '',
   db: 0,
   keyPrefix: 'gateway:',
