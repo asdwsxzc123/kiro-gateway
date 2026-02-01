@@ -1,6 +1,6 @@
 import { useState } from "react"
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
-import { Plus, Trash2, RefreshCw, TestTube, Pencil, BarChart3 } from "lucide-react"
+import { Plus, Trash2, RefreshCw, TestTube, Pencil, BarChart3, Fingerprint } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -45,6 +45,7 @@ import {
   refreshAccountToken,
   testAccount,
   getAllAccountsUsage,
+  regenerateMachineId,
 } from "@/api/accounts"
 import type { AddAccountRequest, Account, AccountUsage } from "@kiro-gateway/shared"
 
@@ -287,6 +288,25 @@ export function Accounts() {
     onError: (error: Error) => {
       toast({
         title: "测试失败",
+        description: error.message,
+        variant: "destructive",
+      })
+    },
+  })
+
+  // 重新生成机器码
+  const regenerateMachineIdMutation = useMutation({
+    mutationFn: regenerateMachineId,
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ["accounts"] })
+      toast({
+        title: "生成成功",
+        description: `新机器码: ${data.machineId?.slice(0, 18)}...`,
+      })
+    },
+    onError: (error: Error) => {
+      toast({
+        title: "生成失败",
         description: error.message,
         variant: "destructive",
       })
@@ -553,7 +573,7 @@ export function Accounts() {
         <Label htmlFor="oidc-refreshToken">Refresh Token *</Label>
         <Input
           id="oidc-refreshToken"
-          type="password"
+
           placeholder="请输入 Refresh Token"
           value={oidcForm.refreshToken}
           onChange={(e) =>
@@ -583,7 +603,7 @@ export function Accounts() {
             <Label htmlFor="oidc-clientSecret">Client Secret *</Label>
             <Input
               id="oidc-clientSecret"
-              type="password"
+
               placeholder="请输入 Client Secret"
               value={oidcForm.clientSecret}
               onChange={(e) =>
@@ -670,7 +690,7 @@ export function Accounts() {
         <Label htmlFor="manual-accessToken">Access Token *</Label>
         <Input
           id="manual-accessToken"
-          type="password"
+
           placeholder="请输入 Access Token"
           value={manualForm.accessToken}
           onChange={(e) =>
@@ -698,7 +718,7 @@ export function Accounts() {
         <Label htmlFor="manual-refreshToken">Refresh Token (可选)</Label>
         <Input
           id="manual-refreshToken"
-          type="password"
+
           placeholder="请输入 Refresh Token"
           value={manualForm.refreshToken || ""}
           onChange={(e) =>
@@ -743,7 +763,7 @@ export function Accounts() {
           <Label htmlFor="manual-clientSecret">Client Secret (可选)</Label>
           <Input
             id="manual-clientSecret"
-            type="password"
+
             placeholder="请输入 Client Secret"
             value={manualForm.clientSecret || ""}
             onChange={(e) =>
@@ -1004,7 +1024,7 @@ export function Accounts() {
               <Label htmlFor="edit-accessToken">Access Token</Label>
               <Input
                 id="edit-accessToken"
-                type="password"
+
                 placeholder="留空表示不修改"
                 value={editForm.accessToken}
                 onChange={(e) =>
@@ -1018,7 +1038,7 @@ export function Accounts() {
               <Label htmlFor="edit-refreshToken">Refresh Token</Label>
               <Input
                 id="edit-refreshToken"
-                type="password"
+
                 placeholder="留空表示不修改"
                 value={editForm.refreshToken}
                 onChange={(e) =>
@@ -1033,7 +1053,7 @@ export function Accounts() {
                 <Label htmlFor="edit-clientId">Client ID</Label>
                 <Input
                   id="edit-clientId"
-                  type="password"
+
                   placeholder="留空表示不修改"
                   value={editForm.clientId}
                   onChange={(e) =>
@@ -1045,7 +1065,7 @@ export function Accounts() {
                 <Label htmlFor="edit-clientSecret">Client Secret</Label>
                 <Input
                   id="edit-clientSecret"
-                  type="password"
+
                   placeholder="留空表示不修改"
                   value={editForm.clientSecret}
                   onChange={(e) =>
@@ -1108,6 +1128,7 @@ export function Accounts() {
               <TableHeader>
                 <TableRow>
                   <TableHead>邮箱/ID</TableHead>
+                  <TableHead>机器码</TableHead>
                   <TableHead>订阅类型</TableHead>
                   <TableHead>状态</TableHead>
                   <TableHead>使用量</TableHead>
@@ -1120,6 +1141,11 @@ export function Accounts() {
                   <TableRow key={account.id}>
                     <TableCell className="font-medium">
                       {account.email || account.id.slice(0, 12) + "..."}
+                    </TableCell>
+                    <TableCell>
+                      <span className="text-xs font-mono text-muted-foreground" title={account.machineId || ""}>
+                        {account.machineId ? account.machineId.slice(0, 8) + "..." : "-"}
+                      </span>
                     </TableCell>
                     <TableCell>
                       <span className="text-sm">{getSubscriptionType(account.id)}</span>
@@ -1150,6 +1176,19 @@ export function Accounts() {
                           title="编辑账号"
                         >
                           <Pencil className="h-4 w-4" />
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          onClick={() => {
+                            if (confirm("确定要重新生成机器码吗？这会更改账号绑定。")) {
+                              regenerateMachineIdMutation.mutate(account.id)
+                            }
+                          }}
+                          disabled={regenerateMachineIdMutation.isPending}
+                          title="生成/重置机器码"
+                        >
+                          <Fingerprint className="h-4 w-4" />
                         </Button>
                         <Button
                           variant="ghost"
