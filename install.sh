@@ -43,19 +43,111 @@ check_command() {
     return 0
 }
 
+# 检测操作系统
+detect_os() {
+    if [ -f /etc/os-release ]; then
+        . /etc/os-release
+        OS=$ID
+        OS_VERSION=$VERSION_ID
+    else
+        OS="unknown"
+        OS_VERSION="unknown"
+    fi
+}
+
+# 安装 Docker (Ubuntu/Debian)
+install_docker_debian() {
+    log_step "开始安装 Docker..."
+
+    # 检查是否有 sudo 权限
+    if [ "$EUID" -ne 0 ]; then
+        if ! check_command sudo; then
+            log_error "需要 root 权限安装 Docker，请使用 sudo 运行此脚本"
+            exit 1
+        fi
+        SUDO="sudo"
+    else
+        SUDO=""
+    fi
+
+    log_info "更新软件包索引..."
+    $SUDO apt-get update -y
+
+    log_info "安装依赖包..."
+    $SUDO apt-get install -y \
+        ca-certificates \
+        curl \
+        gnupg \
+        lsb-release
+
+    log_info "添加 Docker 官方 GPG 密钥..."
+    $SUDO install -m 0755 -d /etc/apt/keyrings
+    curl -fsSL https://download.docker.com/linux/$OS/gpg | $SUDO gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+    $SUDO chmod a+r /etc/apt/keyrings/docker.gpg
+
+    log_info "设置 Docker 仓库..."
+    echo \
+        "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/$OS \
+        $(. /etc/os-release && echo "$VERSION_CODENAME") stable" | \
+        $SUDO tee /etc/apt/sources.list.d/docker.list > /dev/null
+
+    log_info "安装 Docker Engine..."
+    $SUDO apt-get update -y
+    $SUDO apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+
+    log_info "启动 Docker 服务..."
+    $SUDO systemctl start docker
+    $SUDO systemctl enable docker
+
+    # 将当前用户添加到 docker 组
+    if [ "$EUID" -ne 0 ]; then
+        log_info "将当前用户添加到 docker 组..."
+        $SUDO usermod -aG docker $USER
+        log_warn "用户组已更新，可能需要重新登录或运行 'newgrp docker' 使更改生效"
+    fi
+
+    log_info "Docker 安装完成!"
+}
+
 # 检查 Docker
 check_docker() {
     log_step "检查 Docker..."
 
     if ! check_command docker; then
-        log_error "Docker 未安装，请先安装 Docker"
-        log_info "安装指南: https://docs.docker.com/get-docker/"
-        exit 1
+        log_warn "Docker 未安装"
+
+        detect_os
+
+        case "$OS" in
+            ubuntu|debian)
+                log_info "检测到 $OS 系统，开始自动安装 Docker..."
+                install_docker_debian
+                ;;
+            *)
+                log_error "不支持自动安装 Docker 的系统: $OS"
+                log_info "请手动安装 Docker: https://docs.docker.com/get-docker/"
+                exit 1
+                ;;
+        esac
     fi
 
     if ! docker info &> /dev/null; then
-        log_error "Docker 未运行，请启动 Docker"
-        exit 1
+        log_warn "Docker 未运行或当前用户无权限"
+
+        # 尝试启动 Docker
+        if check_command systemctl; then
+            log_info "尝试启动 Docker 服务..."
+            sudo systemctl start docker 2>/dev/null || true
+        fi
+
+        # 再次检查
+        if ! docker info &> /dev/null; then
+            log_error "Docker 未运行，请尝试以下操作："
+            log_info "  1. 运行 'sudo systemctl start docker' 启动 Docker"
+            log_info "  2. 运行 'newgrp docker' 刷新用户组"
+            log_info "  3. 或重新登录系统"
+            exit 1
+        fi
     fi
 
     log_info "Docker 已就绪"
