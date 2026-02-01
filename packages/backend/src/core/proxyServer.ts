@@ -566,7 +566,7 @@ export class ProxyServer {
       onComplete: () => void
       onError: (error: Error) => void
     },
-    headers?: Record<string, string>,
+    _headers?: Record<string, string>,
     matchedApiKey?: ApiKey
   ): Promise<void> {
     this.recordNewRequest()
@@ -584,11 +584,8 @@ export class ProxyServer {
     const format = this.config.thinkingOutputFormat || 'thinking'
 
     // 检查是否启用 Thinking 模式
-    const modelThinkingEnabled = this.config.modelThinkingMode?.[request.model]
-    const headerThinking = headers?.['anthropic-beta']?.toLowerCase().includes('thinking')
-    // 硬编码不是用 thinking
+    // 硬编码不使用 thinking
     const thinkingEnabled = false
-    // const thinkingEnabled = modelThinkingEnabled || headerThinking
 
     // 用于检测 <thinking> 标签
     let textBuffer = ''
@@ -1087,7 +1084,8 @@ export class ProxyServer {
             // 发送工具输入
             const toolDelta = createClaudeStreamEvent('content_block_delta', {
               index: currentBlockIndex,
-              delta: { type: 'input_json_delta', partial_json: JSON.stringify(toolUse.input) }
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              delta: { type: 'input_json_delta', partial_json: JSON.stringify(toolUse.input) } as any
             })
             callbacks.onChunk(`event: content_block_delta\ndata: ${JSON.stringify(toolDelta)}\n\n`)
             // 结束工具块

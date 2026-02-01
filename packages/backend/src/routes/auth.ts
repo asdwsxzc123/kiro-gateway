@@ -6,6 +6,7 @@
 import { Router, Request, Response } from 'express'
 import type { Router as IRouter } from 'express'
 import { createLogger } from '../utils/logger.js'
+import { sendSuccess, errors } from '../utils/response.js'
 import { validatePassword, updatePassword, getAdmin } from '../storage/adminStore.js'
 import { generateToken, decodeToken } from '../middleware/jwtAuth.js'
 import { storeToken, removeToken } from '../storage/tokenStore.js'
@@ -24,12 +25,7 @@ router.post('/login', async (req: Request, res: Response) => {
 
     // 验证请求参数
     if (!username || !password) {
-      res.status(400).json({
-        error: {
-          message: 'Username and password are required',
-          type: 'validation_error'
-        }
-      })
+      errors.validation(res, 'Username and password are required')
       return
     }
 
@@ -38,12 +34,7 @@ router.post('/login', async (req: Request, res: Response) => {
 
     if (!isValid) {
       logger.warn('Login failed', { username, ip: req.ip })
-      res.status(401).json({
-        error: {
-          message: 'Invalid username or password',
-          type: 'authentication_error'
-        }
-      })
+      errors.unauthorized(res, 'Invalid username or password')
       return
     }
 
@@ -70,21 +61,13 @@ router.post('/login', async (req: Request, res: Response) => {
 
     logger.info('Login successful', { username, ip: req.ip })
 
-    res.json({
-      success: true,
-      data: {
-        token,
-        user: { username }
-      }
+    sendSuccess(res, {
+      token,
+      user: { username }
     })
   } catch (error) {
     logger.error('Login error', { error: (error as Error).message })
-    res.status(500).json({
-      error: {
-        message: 'Internal server error',
-        type: 'server_error'
-      }
-    })
+    errors.server(res)
   }
 })
 
@@ -97,35 +80,22 @@ router.get('/me', (req: Request, res: Response) => {
     const user = req.user
 
     if (!user) {
-      res.status(401).json({
-        error: {
-          message: 'Not authenticated',
-          type: 'authentication_error'
-        }
-      })
+      errors.unauthorized(res)
       return
     }
 
     const admin = getAdmin()
 
-    res.json({
-      success: true,
-      data: {
-        user: {
-          username: user.username
-        },
-        createdAt: admin?.createdAt,
-        updatedAt: admin?.updatedAt
-      }
+    sendSuccess(res, {
+      user: {
+        username: user.username
+      },
+      createdAt: admin?.createdAt,
+      updatedAt: admin?.updatedAt
     })
   } catch (error) {
     logger.error('Get user info error', { error: (error as Error).message })
-    res.status(500).json({
-      error: {
-        message: 'Internal server error',
-        type: 'server_error'
-      }
-    })
+    errors.server(res)
   }
 })
 
@@ -138,12 +108,7 @@ router.put('/password', async (req: Request, res: Response) => {
     const user = req.user
 
     if (!user) {
-      res.status(401).json({
-        error: {
-          message: 'Not authenticated',
-          type: 'authentication_error'
-        }
-      })
+      errors.unauthorized(res)
       return
     }
 
@@ -151,23 +116,13 @@ router.put('/password', async (req: Request, res: Response) => {
 
     // 验证请求参数
     if (!oldPassword || !newPassword) {
-      res.status(400).json({
-        error: {
-          message: 'Old password and new password are required',
-          type: 'validation_error'
-        }
-      })
+      errors.validation(res, 'Old password and new password are required')
       return
     }
 
     // 验证新密码长度
     if (newPassword.length < 6) {
-      res.status(400).json({
-        error: {
-          message: 'New password must be at least 6 characters',
-          type: 'validation_error'
-        }
-      })
+      errors.validation(res, 'New password must be at least 6 characters')
       return
     }
 
@@ -175,29 +130,16 @@ router.put('/password', async (req: Request, res: Response) => {
     const success = await updatePassword(oldPassword, newPassword)
 
     if (!success) {
-      res.status(400).json({
-        error: {
-          message: 'Old password is incorrect',
-          type: 'validation_error'
-        }
-      })
+      errors.validation(res, 'Old password is incorrect')
       return
     }
 
     logger.info('Password updated', { username: user.username, ip: req.ip })
 
-    res.json({
-      success: true,
-      message: 'Password updated successfully'
-    })
+    sendSuccess(res, { message: 'Password updated successfully' })
   } catch (error) {
     logger.error('Update password error', { error: (error as Error).message })
-    res.status(500).json({
-      error: {
-        message: 'Internal server error',
-        type: 'server_error'
-      }
-    })
+    errors.server(res)
   }
 })
 
@@ -210,12 +152,7 @@ router.post('/logout', async (req: Request, res: Response) => {
     // 从 Authorization header 提取 token
     const authHeader = req.headers.authorization
     if (!authHeader?.startsWith('Bearer ')) {
-      res.status(400).json({
-        error: {
-          message: 'No token provided',
-          type: 'validation_error'
-        }
-      })
+      errors.validation(res, 'No token provided')
       return
     }
 
@@ -223,12 +160,7 @@ router.post('/logout', async (req: Request, res: Response) => {
     const decoded = decodeToken(token)
 
     if (!decoded) {
-      res.status(400).json({
-        error: {
-          message: 'Invalid token',
-          type: 'validation_error'
-        }
-      })
+      errors.validation(res, 'Invalid token')
       return
     }
 
@@ -237,18 +169,10 @@ router.post('/logout', async (req: Request, res: Response) => {
 
     logger.info('User logged out', { username: decoded.username, ip: req.ip })
 
-    res.json({
-      success: true,
-      message: 'Logged out successfully'
-    })
+    sendSuccess(res, { message: 'Logged out successfully' })
   } catch (error) {
     logger.error('Logout error', { error: (error as Error).message })
-    res.status(500).json({
-      error: {
-        message: 'Internal server error',
-        type: 'server_error'
-      }
-    })
+    errors.server(res)
   }
 })
 

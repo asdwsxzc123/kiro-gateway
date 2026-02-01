@@ -4,6 +4,7 @@
 
 import express, { Express } from 'express'
 import cors from 'cors'
+import path from 'path'
 import { createLogger } from './utils/logger.js'
 import routes from './routes/index.js'
 import { jwtAuthMiddleware } from './middleware/jwtAuth.js'
@@ -48,6 +49,20 @@ export async function createApp(): Promise<Express> {
 
   // 注册路由
   app.use(routes)
+
+  // 静态文件服务 - 服务前端 dist 目录
+  // __dirname 在编译后是 dist 目录，所以 ../public 指向 packages/backend/public
+  const staticPath = path.join(__dirname, '../public')
+  app.use(express.static(staticPath))
+
+  // SPA 路由回退 - 所有非 API 路由返回 index.html
+  app.get('*', (req, res, next) => {
+    // 跳过 API 和代理路由
+    if (req.path.startsWith('/api') || req.path.startsWith('/v1') || req.path === '/health') {
+      return next()
+    }
+    res.sendFile(path.join(staticPath, 'index.html'))
+  })
 
   // 404 处理
   app.use(notFoundHandler)

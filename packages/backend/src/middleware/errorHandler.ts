@@ -4,6 +4,7 @@
 
 import { Request, Response, NextFunction } from 'express'
 import { createLogger } from '../utils/logger.js'
+import { sendError, ErrorTypes } from '../utils/response.js'
 
 const logger = createLogger('ErrorHandler')
 
@@ -17,12 +18,12 @@ export function notFoundHandler(
 ): void {
   logger.warn('Route not found', { path: req.path, method: req.method })
 
-  res.status(404).json({
-    error: {
-      message: `Route ${req.method} ${req.path} not found`,
-      type: 'not_found_error'
-    }
-  })
+  sendError(
+    res,
+    `Route ${req.method} ${req.path} not found`,
+    ErrorTypes.NOT_FOUND,
+    404
+  )
 }
 
 /**
@@ -43,34 +44,21 @@ export function errorHandler(
 
   // 检查是否是已知错误类型
   if (err.name === 'SyntaxError' && 'body' in err) {
-    res.status(400).json({
-      error: {
-        message: 'Invalid JSON in request body',
-        type: 'invalid_request_error'
-      }
-    })
+    sendError(res, 'Invalid JSON in request body', ErrorTypes.VALIDATION_ERROR, 400)
     return
   }
 
   if (err.name === 'ValidationError') {
-    res.status(400).json({
-      error: {
-        message: err.message,
-        type: 'validation_error'
-      }
-    })
+    sendError(res, err.message, ErrorTypes.VALIDATION_ERROR, 400)
     return
   }
 
   // 默认 500 错误
-  res.status(500).json({
-    error: {
-      message: process.env.NODE_ENV === 'production'
-        ? 'Internal server error'
-        : err.message,
-      type: 'internal_error'
-    }
-  })
+  const message = process.env.NODE_ENV === 'production'
+    ? 'Internal server error'
+    : err.message
+
+  sendError(res, message, ErrorTypes.SERVER_ERROR, 500)
 }
 
 /**

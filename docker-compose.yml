@@ -1,0 +1,64 @@
+# Kiro Gateway Docker Compose 配置
+# 包含 Gateway 服务（前端+后端）和 Redis
+
+services:
+  # Kiro Gateway 服务
+  gateway:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: kiro-gateway
+    restart: unless-stopped
+    ports:
+      - "${PORT:-8000}:8000"
+    environment:
+      NODE_ENV: production
+      PORT: "8000"
+      HOST: 0.0.0.0
+      REDIS_URL: redis://redis:6379
+      REDIS_DB: "0"
+      REDIS_KEY_PREFIX: "gateway:"
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY:-""}
+      RATE_LIMIT_ENABLED: ${RATE_LIMIT_ENABLED:-false}
+      RATE_LIMIT_WINDOW_MS: ${RATE_LIMIT_WINDOW_MS:-60000}
+      RATE_LIMIT_MAX_REQUESTS: ${RATE_LIMIT_MAX_REQUESTS:-100}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      JWT_SECRET: ${JWT_SECRET:-your-jwt-secret-change-in-production}
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - kiro-network
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+  # Redis 服务
+  redis:
+    image: redis:7-alpine
+    container_name: kiro-redis
+    restart: unless-stopped
+    ports:
+      - "${REDIS_PORT:-16999}:6379"
+    volumes:
+      - redis-data:/data
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    networks:
+      - kiro-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+
+networks:
+  kiro-network:
+    driver: bridge
+
+volumes:
+  redis-data:
+    driver: local
