@@ -15,7 +15,7 @@ COPY packages/shared/package.json ./packages/shared/
 COPY packages/frontend/package.json ./packages/frontend/
 
 # 安装依赖
-RUN pnpm install --frozen-lockfile
+RUN pnpm install
 
 # 复制源代码
 COPY packages/shared ./packages/shared
@@ -39,7 +39,7 @@ COPY packages/shared/package.json ./packages/shared/
 COPY packages/backend/package.json ./packages/backend/
 
 # 安装依赖
-RUN pnpm install --frozen-lockfile
+RUN pnpm install
 
 # 复制源代码
 COPY packages/shared ./packages/shared
@@ -66,7 +66,7 @@ COPY packages/shared/package.json ./packages/shared/
 COPY packages/backend/package.json ./packages/backend/
 
 # 只安装生产依赖
-RUN pnpm install --frozen-lockfile --prod
+RUN pnpm install --prod
 
 # 复制 shared 源码（运行时需要）
 COPY packages/shared ./packages/shared
