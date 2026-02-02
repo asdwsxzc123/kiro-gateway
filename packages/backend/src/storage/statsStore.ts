@@ -16,6 +16,9 @@ export interface GlobalStats {
   totalCredits: number
   inputTokens: number
   outputTokens: number
+  totalCost: number
+  cacheCreationTokens: number
+  cacheReadTokens: number
   startTime: number
 }
 
@@ -44,6 +47,9 @@ export async function getGlobalStats(): Promise<GlobalStats> {
         totalCredits: 0,
         inputTokens: 0,
         outputTokens: 0,
+        totalCost: 0,
+        cacheCreationTokens: 0,
+        cacheReadTokens: 0,
         startTime: Date.now()
       }
     }
@@ -56,6 +62,9 @@ export async function getGlobalStats(): Promise<GlobalStats> {
       totalCredits: parseFloat(data.totalCredits) || 0,
       inputTokens: parseInt(data.inputTokens, 10) || 0,
       outputTokens: parseInt(data.outputTokens, 10) || 0,
+      totalCost: parseFloat(data.totalCost) || 0,
+      cacheCreationTokens: parseInt(data.cacheCreationTokens, 10) || 0,
+      cacheReadTokens: parseInt(data.cacheReadTokens, 10) || 0,
       startTime: parseInt(data.startTime, 10) || Date.now()
     }
   } catch (error) {
@@ -68,6 +77,9 @@ export async function getGlobalStats(): Promise<GlobalStats> {
       totalCredits: 0,
       inputTokens: 0,
       outputTokens: 0,
+      totalCost: 0,
+      cacheCreationTokens: 0,
+      cacheReadTokens: 0,
       startTime: Date.now()
     }
   }
@@ -80,7 +92,10 @@ export async function updateGlobalStats(
   success: boolean,
   inputTokens: number,
   outputTokens: number,
-  credits: number = 0
+  credits: number = 0,
+  cost: number = 0,
+  cacheCreationTokens: number = 0,
+  cacheReadTokens: number = 0
 ): Promise<void> {
   const redis = getRedisClient()
 
@@ -93,6 +108,9 @@ export async function updateGlobalStats(
     pipeline.hincrby(GLOBAL_STATS_KEY, 'outputTokens', outputTokens)
     pipeline.hincrby(GLOBAL_STATS_KEY, 'totalTokens', inputTokens + outputTokens)
     pipeline.hincrbyfloat(GLOBAL_STATS_KEY, 'totalCredits', credits)
+    pipeline.hincrbyfloat(GLOBAL_STATS_KEY, 'totalCost', cost)
+    pipeline.hincrby(GLOBAL_STATS_KEY, 'cacheCreationTokens', cacheCreationTokens)
+    pipeline.hincrby(GLOBAL_STATS_KEY, 'cacheReadTokens', cacheReadTokens)
 
     // 设置开始时间（如果不存在）
     pipeline.hsetnx(GLOBAL_STATS_KEY, 'startTime', String(Date.now()))
@@ -121,7 +139,8 @@ export async function getAccountStats(accountId: string): Promise<AccountStats> 
         errors: 0,
         lastUsed: 0,
         avgResponseTime: 0,
-        totalResponseTime: 0
+        totalResponseTime: 0,
+        totalCost: 0
       }
     }
 
@@ -136,7 +155,8 @@ export async function getAccountStats(accountId: string): Promise<AccountStats> 
       errors: parseInt(data.errors, 10) || 0,
       lastUsed: parseInt(data.lastUsed, 10) || 0,
       avgResponseTime: requests > 0 ? totalResponseTime / requests : 0,
-      totalResponseTime
+      totalResponseTime,
+      totalCost: parseFloat(data.totalCost) || 0
     }
   } catch (error) {
     logger.error('Failed to get account stats', { accountId, error: (error as Error).message })
@@ -148,7 +168,8 @@ export async function getAccountStats(accountId: string): Promise<AccountStats> 
       errors: 0,
       lastUsed: 0,
       avgResponseTime: 0,
-      totalResponseTime: 0
+      totalResponseTime: 0,
+      totalCost: 0
     }
   }
 }
@@ -161,7 +182,8 @@ export async function updateAccountStats(
   success: boolean,
   inputTokens: number,
   outputTokens: number,
-  responseTime: number
+  responseTime: number,
+  cost: number = 0
 ): Promise<void> {
   const redis = getRedisClient()
 
@@ -174,6 +196,7 @@ export async function updateAccountStats(
     pipeline.hincrby(ACCOUNT_STATS_PREFIX + accountId, 'tokens', inputTokens + outputTokens)
     pipeline.hincrby(ACCOUNT_STATS_PREFIX + accountId, 'totalResponseTime', responseTime)
     pipeline.hset(ACCOUNT_STATS_PREFIX + accountId, 'lastUsed', String(Date.now()))
+    pipeline.hincrbyfloat(ACCOUNT_STATS_PREFIX + accountId, 'totalCost', cost)
 
     if (!success) {
       pipeline.hincrby(ACCOUNT_STATS_PREFIX + accountId, 'errors', 1)

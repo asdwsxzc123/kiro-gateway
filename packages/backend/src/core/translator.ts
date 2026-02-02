@@ -292,7 +292,7 @@ function shortenToolName(name: string): string {
 export function kiroToOpenaiResponse(
   content: string,
   toolUses: KiroToolUse[],
-  usage: { inputTokens: number; outputTokens: number },
+  usage: { inputTokens: number; outputTokens: number; cacheCreationTokens?: number; cacheReadTokens?: number },
   model: string
 ): OpenAIChatResponse {
   return {
@@ -319,7 +319,8 @@ export function kiroToOpenaiResponse(
     usage: {
       prompt_tokens: usage.inputTokens,
       completion_tokens: usage.outputTokens,
-      total_tokens: usage.inputTokens + usage.outputTokens
+      total_tokens: usage.inputTokens + usage.outputTokens,
+      ...(usage.cacheReadTokens ? { prompt_tokens_details: { cached_tokens: usage.cacheReadTokens } } : {})
     }
   }
 }
@@ -613,7 +614,7 @@ function convertClaudeTools(tools?: { name: string; description: string; input_s
 export function kiroToClaudeResponse(
   content: string,
   toolUses: KiroToolUse[],
-  usage: { inputTokens: number; outputTokens: number },
+  usage: { inputTokens: number; outputTokens: number; cacheCreationTokens?: number; cacheReadTokens?: number },
   model: string
 ): ClaudeResponse {
   const contentBlocks: ClaudeContentBlock[] = []
@@ -641,7 +642,9 @@ export function kiroToClaudeResponse(
     stop_sequence: null,
     usage: {
       input_tokens: usage.inputTokens,
-      output_tokens: usage.outputTokens
+      output_tokens: usage.outputTokens,
+      ...(usage.cacheCreationTokens ? { cache_creation_input_tokens: usage.cacheCreationTokens } : {}),
+      ...(usage.cacheReadTokens ? { cache_read_input_tokens: usage.cacheReadTokens } : {})
     }
   }
 }

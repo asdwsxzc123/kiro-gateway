@@ -11,6 +11,7 @@ import * as statsStore from '../storage/statsStore.js'
 import * as logStore from '../storage/logStore.js'
 import type { OpenAIChatRequest, OpenAIChatResponse, ClaudeRequest, ClaudeResponse, KiroToolUse, ProxyAccount } from '../core/types.js'
 import { v4 as uuidv4 } from 'uuid'
+import { calculateCost } from '../core/pricing.js'
 
 const logger = createLogger('ProxyService')
 
@@ -56,7 +57,7 @@ export async function handleOpenAIRequest(
 
     let content = ''
     const toolUses: KiroToolUse[] = []
-    let usage = { inputTokens: 0, outputTokens: 0, credits: 0 }
+    let usage: { inputTokens: number; outputTokens: number; credits: number; cacheReadTokens?: number; cacheWriteTokens?: number } = { inputTokens: 0, outputTokens: 0, credits: 0 }
 
     await new Promise<void>((resolve, reject) => {
       callKiroApiStream(
@@ -75,10 +76,10 @@ export async function handleOpenAIRequest(
     })
 
     const responseTime = Date.now() - startTime
-    const response = kiroToOpenaiResponse(content, toolUses, usage, request.model)
+    const response = kiroToOpenaiResponse(content, toolUses, { ...usage, cacheCreationTokens: usage.cacheWriteTokens, cacheReadTokens: usage.cacheReadTokens }, request.model)
 
     // 更新统计
-    await updateStats(selectedAccount.id, true, usage, responseTime, request.model, '/v1/chat/completions', selectedAccount.machineId)
+    await updateStats(selectedAccount.id, true, { ...usage, cacheCreationTokens: usage.cacheWriteTokens }, responseTime, request.model, '/v1/chat/completions', selectedAccount.machineId)
 
     logger.info('OpenAI request completed', {
       accountId: selectedAccount.id,
@@ -198,7 +199,8 @@ export async function handleOpenAIStreamRequest(
         const finalChunk = createOpenaiStreamChunk(streamId, request.model, {}, finishReason, {
           prompt_tokens: usage.inputTokens,
           completion_tokens: usage.outputTokens,
-          total_tokens: usage.inputTokens + usage.outputTokens
+          total_tokens: usage.inputTokens + usage.outputTokens,
+          ...(usage.cacheReadTokens ? { prompt_tokens_details: { cached_tokens: usage.cacheReadTokens } } : {})
         })
         callbacks.onChunk(`data: ${JSON.stringify(finalChunk)}\n\n`)
         callbacks.onChunk('data: [DONE]\n\n')
@@ -211,7 +213,7 @@ export async function handleOpenAIStreamRequest(
           credits: usage.credits
         })
 
-        await updateStats(selectedAccount.id, true, usage, responseTime, request.model, '/v1/chat/completions', selectedAccount.machineId)
+        await updateStats(selectedAccount.id, true, { ...usage, cacheCreationTokens: usage.cacheWriteTokens }, responseTime, request.model, '/v1/chat/completions', selectedAccount.machineId)
         callbacks.onComplete(usage)
       },
       async (error) => {
@@ -258,7 +260,7 @@ export async function handleClaudeRequest(
 
     let content = ''
     const toolUses: KiroToolUse[] = []
-    let usage = { inputTokens: 0, outputTokens: 0, credits: 0 }
+    let usage: { inputTokens: number; outputTokens: number; credits: number; cacheReadTokens?: number; cacheWriteTokens?: number } = { inputTokens: 0, outputTokens: 0, credits: 0 }
 
     await new Promise<void>((resolve, reject) => {
       callKiroApiStream(
@@ -277,9 +279,9 @@ export async function handleClaudeRequest(
     })
 
     const responseTime = Date.now() - startTime
-    const response = kiroToClaudeResponse(content, toolUses, usage, request.model)
+    const response = kiroToClaudeResponse(content, toolUses, { ...usage, cacheCreationTokens: usage.cacheWriteTokens, cacheReadTokens: usage.cacheReadTokens }, request.model)
 
-    await updateStats(selectedAccount.id, true, usage, responseTime, request.model, '/v1/messages', selectedAccount.machineId)
+    await updateStats(selectedAccount.id, true, { ...usage, cacheCreationTokens: usage.cacheWriteTokens }, responseTime, request.model, '/v1/messages', selectedAccount.machineId)
 
     return { success: true, response, usage }
   } catch (error) {
@@ -413,10 +415,15 @@ export async function handleClaudeStreamRequest(
 
         // 发送 message_delta
         const stopReason = toolUses.length > 0 ? 'tool_use' : 'end_turn'
-        const messageDelta = createClaudeStreamEvent('message_delta', {
-          delta: { type: 'message_delta', stop_reason: stopReason, stop_sequence: undefined },
-          usage: { output_tokens: usage.outputTokens }
-        })
+        const messageDelta: Record<string, unknown> = {
+          type: 'message_delta',
+          delta: { type: 'message_delta', stop_reason: stopReason, stop_sequence: null },
+          usage: {
+            output_tokens: usage.outputTokens,
+            ...(usage.cacheWriteTokens ? { cache_creation_input_tokens: usage.cacheWriteTokens } : {}),
+            ...(usage.cacheReadTokens ? { cache_read_input_tokens: usage.cacheReadTokens } : {})
+          }
+        }
         callbacks.onChunk(`event: message_delta\ndata: ${JSON.stringify(messageDelta)}\n\n`)
         logger.debug('Claude message_delta sent', { messageId, stopReason })
 
@@ -432,7 +439,7 @@ export async function handleClaudeStreamRequest(
           credits: usage.credits
         })
 
-        await updateStats(selectedAccount.id, true, usage, responseTime, request.model, '/v1/messages', selectedAccount.machineId)
+        await updateStats(selectedAccount.id, true, { ...usage, cacheCreationTokens: usage.cacheWriteTokens }, responseTime, request.model, '/v1/messages', selectedAccount.machineId)
         callbacks.onComplete(usage)
       },
       async (error) => {
@@ -468,7 +475,7 @@ export async function handleClaudeStreamRequest(
 async function updateStats(
   accountId: string,
   success: boolean,
-  usage: { inputTokens: number; outputTokens: number; credits: number },
+  usage: { inputTokens: number; outputTokens: number; credits: number; cacheCreationTokens?: number; cacheReadTokens?: number },
   responseTime: number,
   model: string,
   path: string,
@@ -476,11 +483,14 @@ async function updateStats(
   error?: string
 ): Promise<void> {
   try {
+    // 计算费用
+    const costResult = calculateCost(model, usage.inputTokens, usage.outputTokens, usage.cacheCreationTokens || 0, usage.cacheReadTokens || 0)
+
     // 更新全局统计
-    await statsStore.updateGlobalStats(success, usage.inputTokens, usage.outputTokens, usage.credits)
+    await statsStore.updateGlobalStats(success, usage.inputTokens, usage.outputTokens, usage.credits, costResult.totalCost, usage.cacheCreationTokens || 0, usage.cacheReadTokens || 0)
 
     // 更新账号统计
-    await statsStore.updateAccountStats(accountId, success, usage.inputTokens, usage.outputTokens, responseTime)
+    await statsStore.updateAccountStats(accountId, success, usage.inputTokens, usage.outputTokens, responseTime, costResult.totalCost)
 
     // 更新模型统计
     await statsStore.updateModelStats(mapModelId(model), usage.inputTokens + usage.outputTokens)
@@ -498,6 +508,9 @@ async function updateStats(
       inputTokens: usage.inputTokens,
       outputTokens: usage.outputTokens,
       credits: usage.credits,
+      cacheCreationTokens: usage.cacheCreationTokens,
+      cacheReadTokens: usage.cacheReadTokens,
+      cost: costResult.totalCost,
       responseTime,
       success,
       error

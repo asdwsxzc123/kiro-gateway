@@ -59,6 +59,9 @@ export interface OpenAIChatResponse {
     prompt_tokens: number
     completion_tokens: number
     total_tokens: number
+    prompt_tokens_details?: {
+      cached_tokens?: number
+    }
   }
 }
 
@@ -149,6 +152,8 @@ export interface ClaudeResponse {
   usage: {
     input_tokens: number
     output_tokens: number
+    cache_creation_input_tokens?: number
+    cache_read_input_tokens?: number
   }
 }
 
@@ -397,6 +402,9 @@ export interface ProxyStats {
   totalCredits: number
   inputTokens: number
   outputTokens: number
+  totalCost: number
+  cacheCreationTokens: number
+  cacheReadTokens: number
   startTime: number
   // 扩展统计
   accountStats: Map<string, AccountStats>
@@ -414,6 +422,7 @@ export interface AccountStats {
   lastUsed: number
   avgResponseTime: number
   totalResponseTime: number
+  totalCost: number
 }
 
 export interface EndpointStats {
@@ -442,6 +451,9 @@ export interface RequestLog {
   inputTokens: number
   outputTokens: number
   credits?: number
+  cacheCreationTokens?: number
+  cacheReadTokens?: number
+  cost?: number
   responseTime: number
   success: boolean
   error?: string
