@@ -35,6 +35,8 @@ import { callKiroApiStream, callKiroApi } from './kiroApi.js'
 import { createLogger } from '../utils/logger.js'
 import { refreshTokenByMethod, needsTokenRefresh } from './tokenRefresh.js'
 import { hasWebSearchTool, handleWebSearchStream } from './websearch.js'
+import * as logStore from '../storage/logStore.js'
+import { calculateCost } from './pricing.js'
 
 const logger = createLogger('ProxyServer')
 
@@ -325,9 +327,13 @@ export class ProxyServer {
       path: log.path || '',
       model: log.model || '',
       accountId: log.accountId || '',
+      machineId: log.machineId,
       inputTokens: log.inputTokens || 0,
       outputTokens: log.outputTokens || 0,
       credits: log.credits,
+      cacheCreationTokens: log.cacheCreationTokens,
+      cacheReadTokens: log.cacheReadTokens,
+      cost: log.cost,
       responseTime: log.responseTime || 0,
       success: log.success ?? true,
       error: log.error
@@ -339,6 +345,11 @@ export class ProxyServer {
     }
 
     this.events.onStatsUpdate?.(this.stats)
+
+    // 写入 Redis 持久化日志
+    logStore.addRequestLog(requestLog).catch(err => {
+      logger.error('Failed to persist request log', { error: (err as Error).message })
+    })
   }
 
   // ============ 重试机制 ============
@@ -450,12 +461,19 @@ export class ProxyServer {
         outputTokens: result.usage.outputTokens
       })
 
+      const cacheWrite1 = (result.usage as Record<string, number>).cacheWriteTokens || 0
+      const cacheRead1 = (result.usage as Record<string, number>).cacheReadTokens || 0
+      const cost1 = calculateCost(request.model, result.usage.inputTokens, result.usage.outputTokens, cacheWrite1, cacheRead1)
       this.recordRequest({
         path: '/v1/chat/completions',
         model: request.model,
         accountId: usedAccount.id,
+        machineId: usedAccount.machineId,
         inputTokens: result.usage.inputTokens,
         outputTokens: result.usage.outputTokens,
+        cacheCreationTokens: cacheWrite1,
+        cacheReadTokens: cacheRead1,
+        cost: cost1.totalCost,
         responseTime: Date.now() - startTime,
         success: true
       })
@@ -526,12 +544,19 @@ export class ProxyServer {
         outputTokens: result.usage.outputTokens
       })
 
+      const cacheWrite2 = (result.usage as Record<string, number>).cacheWriteTokens || 0
+      const cacheRead2 = (result.usage as Record<string, number>).cacheReadTokens || 0
+      const cost2 = calculateCost(request.model, result.usage.inputTokens, result.usage.outputTokens, cacheWrite2, cacheRead2)
       this.recordRequest({
         path: '/v1/messages',
         model: request.model,
         accountId: usedAccount.id,
+        machineId: usedAccount.machineId,
         inputTokens: result.usage.inputTokens,
         outputTokens: result.usage.outputTokens,
+        cacheCreationTokens: cacheWrite2,
+        cacheReadTokens: cacheRead2,
+        cost: cost2.totalCost,
         responseTime: Date.now() - startTime,
         success: true
       })
@@ -772,12 +797,17 @@ export class ProxyServer {
               credits: usage.credits
             })
 
+            const costStream1 = calculateCost(request.model, usage.inputTokens, usage.outputTokens, usage.cacheWriteTokens || 0, usage.cacheReadTokens || 0)
             this.recordRequest({
               path: '/v1/chat/completions',
               model: request.model,
               accountId: account.id,
+              machineId: account.machineId,
               inputTokens: usage.inputTokens,
               outputTokens: usage.outputTokens,
+              cacheCreationTokens: usage.cacheWriteTokens || 0,
+              cacheReadTokens: usage.cacheReadTokens || 0,
+              cost: costStream1.totalCost,
               credits: usage.credits,
               responseTime: Date.now() - startTime,
               success: true
@@ -1175,12 +1205,17 @@ export class ProxyServer {
             credits: usage.credits
           })
 
+          const costStream2 = calculateCost(model, usage.inputTokens, usage.outputTokens, usage.cacheWriteTokens || 0, usage.cacheReadTokens || 0)
           this.recordRequest({
             path: '/v1/messages',
             model,
             accountId: account.id,
+            machineId: account.machineId,
             inputTokens: usage.inputTokens,
             outputTokens: usage.outputTokens,
+            cacheCreationTokens: usage.cacheWriteTokens || 0,
+            cacheReadTokens: usage.cacheReadTokens || 0,
+            cost: costStream2.totalCost,
             credits: usage.credits,
             responseTime: Date.now() - startTime,
             success: true

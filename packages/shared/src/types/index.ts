@@ -155,6 +155,9 @@ export interface RequestLog {
   inputTokens: number;
   outputTokens: number;
   credits?: number;
+  cacheCreationTokens?: number;
+  cacheReadTokens?: number;
+  cost?: number;
   responseTime: number;
   success: boolean;
   error?: string;

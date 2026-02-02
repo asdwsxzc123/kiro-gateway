@@ -1,6 +1,6 @@
 import { useState } from "react"
 import { useQuery } from "@tanstack/react-query"
-import { Search, Filter, ChevronDown, ChevronUp } from "lucide-react"
+import { Search, Filter, Loader2 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import {
@@ -29,87 +29,48 @@ import { getRequestLogs } from "@/api/logs"
 import type { LogsQuery, RequestLog } from "@kiro-gateway/shared"
 
 /**
- * Logs 页面 - 日志查看
- * 支持筛选和查看详情
+ * Logs 页面 - 请求日志与 Token 使用明细
  */
 export function Logs() {
-  // 筛选条件
   const [query, setQuery] = useState<LogsQuery>({
     limit: 50,
   })
-  // 展开的日志 ID
-  const [expandedId, setExpandedId] = useState<string | null>(null)
-  // 状态筛选
   const [statusFilter, setStatusFilter] = useState<string>("all")
 
-  // 获取日志列表
-  const { data: logs, isLoading } = useQuery({
+  const { data: logs, isLoading, isFetching, refetch } = useQuery({
     queryKey: ["logs", query],
     queryFn: () => getRequestLogs(query),
   })
 
-  // 根据状态筛选日志
-  const filteredLogs = logs?.filter(log => {
+  const filteredLogs = logs?.filter((log) => {
     if (statusFilter === "all") return true
     if (statusFilter === "success") return log.success
     if (statusFilter === "error") return !log.success
     return true
   })
 
-  // 格式化日期
   const formatDate = (timestamp: number) => {
     return new Date(timestamp).toLocaleString("zh-CN")
   }
 
-  // 切换展开状态
-  const toggleExpand = (id: string) => {
-    setExpandedId(expandedId === id ? null : id)
+  const getProvider = (model: string) => {
+    if (model.startsWith("claude")) return "claude"
+    if (model.startsWith("gpt")) return "openai"
+    return "unknown"
   }
 
-  // 渲染日志详情
-  const renderLogDetail = (log: RequestLog) => {
-    if (expandedId !== log.id) return null
-    return (
-      <TableRow key={`${log.id}-detail`}>
-        <TableCell colSpan={7} className="bg-muted/50 p-4">
-          <div className="grid gap-2 text-sm">
-            <div>
-              <span className="font-medium">请求路径：</span>
-              {log.path}
-            </div>
-            <div>
-              <span className="font-medium">输入 Token：</span>
-              {log.inputTokens}
-            </div>
-            <div>
-              <span className="font-medium">输出 Token：</span>
-              {log.outputTokens}
-            </div>
-            {log.credits && (
-              <div>
-                <span className="font-medium">消耗额度：</span>
-                {log.credits}
-              </div>
-            )}
-            {log.error && (
-              <div>
-                <span className="font-medium text-destructive">错误信息：</span>
-                {log.error}
-              </div>
-            )}
-          </div>
-        </TableCell>
-      </TableRow>
-    )
+  const formatCost = (cost?: number) => {
+    if (cost === undefined || cost === null) return "$0"
+    if (cost === 0) return "$0"
+    return `$${cost.toFixed(6)}`
   }
 
   return (
     <div className="space-y-6">
-      {/* 页面标题 */}
       <div>
-        <h2 className="text-2xl font-bold tracking-tight">日志查看</h2>
+        <h2 className="text-2xl font-bold tracking-tight">请求日志</h2>
         <p className="text-muted-foreground">
-          查看 API 请求日志，支持筛选和搜索
+          查看 API 请求日志与 Token 使用明细
         </p>
       </div>
 
@@ -123,7 +84,6 @@ export function Logs() {
         </CardHeader>
         <CardContent>
           <div className="flex flex-wrap gap-4">
-            {/* 状态筛选 */}
             <div className="w-40">
               <Select
                 value={statusFilter}
@@ -140,7 +100,6 @@ export function Logs() {
               </Select>
             </div>
 
-            {/* 数量限制 */}
             <div className="w-32">
               <Input
                 type="number"
@@ -152,13 +111,17 @@ export function Logs() {
               />
             </div>
 
-            {/* 搜索按钮 */}
             <Button
               variant="outline"
-              onClick={() => setQuery({ ...query })}
+              onClick={() => refetch()}
+              disabled={isFetching}
             >
-              <Search className="mr-2 h-4 w-4" />
-              刷新
+              {isFetching ? (
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              ) : (
+                <Search className="mr-2 h-4 w-4" />
+              )}
+              {isFetching ? "刷新中..." : "刷新"}
             </Button>
           </div>
         </CardContent>
@@ -180,55 +143,52 @@ export function Logs() {
               暂无日志记录
             </div>
           ) : (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead className="w-10"></TableHead>
-                  <TableHead>时间</TableHead>
-                  <TableHead>账号ID</TableHead>
-                  <TableHead>模型</TableHead>
-                  <TableHead>状态</TableHead>
-                  <TableHead>耗时</TableHead>
-                  <TableHead>Token</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {filteredLogs?.map((log) => (
-                  <>
-                    <TableRow
-                      key={log.id || log.timestamp}
-                      className="cursor-pointer"
-                      onClick={() => toggleExpand(log.id || String(log.timestamp))}
-                    >
-                      <TableCell>
-                        {expandedId === (log.id || String(log.timestamp)) ? (
-                          <ChevronUp className="h-4 w-4" />
-                        ) : (
-                          <ChevronDown className="h-4 w-4" />
-                        )}
-                      </TableCell>
-                      <TableCell>{formatDate(log.timestamp)}</TableCell>
-                      <TableCell>{log.accountId.slice(0, 8)}...</TableCell>
-                      <TableCell>{log.model}</TableCell>
+            <div className="overflow-x-auto">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>时间</TableHead>
+                    <TableHead>服务商</TableHead>
+                    <TableHead>模型</TableHead>
+                    <TableHead>接口</TableHead>
+                    <TableHead className="text-right">输入Tokens</TableHead>
+                    <TableHead className="text-right">输出Tokens</TableHead>
+                    <TableHead className="text-right">缓存读</TableHead>
+                    <TableHead className="text-right">缓存建</TableHead>
+                    <TableHead className="text-right">费用($)</TableHead>
+                    <TableHead>消费类型</TableHead>
+                    <TableHead className="text-right">耗时</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {filteredLogs?.map((log) => (
+                    <TableRow key={log.id || log.timestamp}>
+                      <TableCell className="whitespace-nowrap">{formatDate(log.timestamp)}</TableCell>
+                      <TableCell>{getProvider(log.model)}</TableCell>
+                      <TableCell className="max-w-[200px] truncate" title={log.model}>{log.model}</TableCell>
+                      <TableCell className="font-mono text-xs">{log.path}</TableCell>
+                      <TableCell className="text-right">{log.inputTokens.toLocaleString()}</TableCell>
+                      <TableCell className="text-right">{log.outputTokens.toLocaleString()}</TableCell>
+                      <TableCell className="text-right">{(log.cacheReadTokens ?? 0).toLocaleString()}</TableCell>
+                      <TableCell className="text-right">{(log.cacheCreationTokens ?? 0).toLocaleString()}</TableCell>
+                      <TableCell className="text-right whitespace-nowrap">{formatCost(log.cost)}</TableCell>
                       <TableCell>
                         <span
-                          className={`inline-flex items-center rounded-full px-2 py-1 text-xs font-medium ${
+                          className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${
                             log.success
                               ? "bg-green-100 text-green-700"
                               : "bg-red-100 text-red-700"
                           }`}
                         >
-                          {log.success ? "成功" : "失败"}
+                          {log.success ? "正常" : "失败"}
                         </span>
                       </TableCell>
-                      <TableCell>{log.responseTime}ms</TableCell>
-                      <TableCell>{log.inputTokens + log.outputTokens}</TableCell>
+                      <TableCell className="text-right">{log.responseTime}ms</TableCell>
                     </TableRow>
-                    {renderLogDetail(log)}
-                  </>
-                ))}
-              </TableBody>
-            </Table>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
           )}
         </CardContent>
       </Card>
