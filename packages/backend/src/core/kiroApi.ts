@@ -38,12 +38,12 @@ export const KIRO_ENDPOINTS = [
 const KIRO_VERSION = '0.6.18'
 
 // User-Agent 生成函数 - Social 认证方式（包含 machineId）
-function getKiroUserAgent(machineId?: string): string {
+export function getKiroUserAgent(machineId?: string): string {
   const suffix = machineId ? `KiroIDE-${KIRO_VERSION}-${machineId}` : `KiroIDE-${KIRO_VERSION}`
   return `aws-sdk-js/1.0.18 ua/2.1 os/windows lang/js md/nodejs#20.16.0 api/codewhispererstreaming#1.0.18 m/E ${suffix}`
 }
 
-function getKiroAmzUserAgent(machineId?: string): string {
+export function getKiroAmzUserAgent(machineId?: string): string {
   const suffix = machineId ? `KiroIDE ${KIRO_VERSION} ${machineId}` : `KiroIDE-${KIRO_VERSION}`
   return `aws-sdk-js/1.0.18 ${suffix}`
 }

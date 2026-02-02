@@ -34,6 +34,7 @@ import {
 import { callKiroApiStream, callKiroApi } from './kiroApi.js'
 import { createLogger } from '../utils/logger.js'
 import { refreshTokenByMethod, needsTokenRefresh } from './tokenRefresh.js'
+import { hasWebSearchTool, handleWebSearchStream } from './websearch.js'
 
 const logger = createLogger('ProxyServer')
 
@@ -831,6 +832,17 @@ export class ProxyServer {
     }
 
     const startTime = Date.now()
+
+    // 检查是否为 WebSearch 请求，完全绕过 Kiro generateAssistantResponse
+    if (hasWebSearchTool(request)) {
+      logger.info('WebSearch tool detected, routing to WebSearch handler')
+      try {
+        await handleWebSearchStream(request, account, callbacks, matchedApiKey)
+      } catch (error) {
+        callbacks.onError(error as Error)
+      }
+      return
+    }
 
     // 检查是否启用 Thinking 模式
     const modelThinkingEnabled = this.config.modelThinkingMode?.[request.model]

@@ -124,9 +124,11 @@ export interface ClaudeContentBlock {
 }
 
 export interface ClaudeTool {
+  type?: string           // e.g. "web_search_20250305" for WebSearch tool
   name: string
   description: string
   input_schema: unknown
+  max_uses?: number       // WebSearch max uses
 }
 
 export interface ClaudeResponse {
