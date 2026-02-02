@@ -90,6 +90,11 @@ export interface OpenAIStreamChunk {
 
 // ============ Claude 兼容格式 ============
 
+export interface ClaudeThinkingConfig {
+  type: 'enabled' | 'disabled'
+  budget_tokens?: number
+}
+
 export interface ClaudeRequest {
   model: string
   messages: ClaudeMessage[]
@@ -100,6 +105,7 @@ export interface ClaudeRequest {
   system?: string | ClaudeSystemBlock[]
   tools?: ClaudeTool[]
   tool_choice?: { type: string; name?: string }
+  thinking?: ClaudeThinkingConfig
 }
 
 export interface ClaudeMessage {
@@ -113,8 +119,9 @@ export interface ClaudeSystemBlock {
 }
 
 export interface ClaudeContentBlock {
-  type: 'text' | 'image' | 'tool_use' | 'tool_result'
+  type: 'text' | 'image' | 'tool_use' | 'tool_result' | 'thinking'
   text?: string
+  thinking?: string
   source?: { type: 'base64'; media_type: string; data: string }
   id?: string
   name?: string
@@ -124,9 +131,11 @@ export interface ClaudeContentBlock {
 }
 
 export interface ClaudeTool {
+  type?: string           // e.g. "web_search_20250305" for WebSearch tool
   name: string
   description: string
   input_schema: unknown
+  max_uses?: number       // WebSearch max uses
 }
 
 export interface ClaudeResponse {
@@ -147,8 +156,8 @@ export interface ClaudeStreamEvent {
   type: 'message_start' | 'content_block_start' | 'content_block_delta' | 'content_block_stop' | 'message_delta' | 'message_stop' | 'ping' | 'error'
   message?: Partial<ClaudeResponse>
   index?: number
-  content_block?: ClaudeContentBlock
-  delta?: { type: string; text?: string; stop_reason?: string; stop_sequence?: string }
+  content_block?: ClaudeContentBlock | { type: 'thinking'; thinking: string }
+  delta?: { type: string; text?: string; thinking?: string; stop_reason?: string; stop_sequence?: string }
   usage?: { input_tokens?: number; output_tokens: number }
   error?: { type: string; message: string }
 }

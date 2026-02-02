@@ -34,6 +34,7 @@ import {
 import { callKiroApiStream, callKiroApi } from './kiroApi.js'
 import { createLogger } from '../utils/logger.js'
 import { refreshTokenByMethod, needsTokenRefresh } from './tokenRefresh.js'
+import { hasWebSearchTool, handleWebSearchStream } from './websearch.js'
 
 const logger = createLogger('ProxyServer')
 
@@ -584,8 +585,7 @@ export class ProxyServer {
     const format = this.config.thinkingOutputFormat || 'thinking'
 
     // 检查是否启用 Thinking 模式
-    // 硬编码不使用 thinking
-    const thinkingEnabled = false
+    const thinkingEnabled = !!this.config.modelThinkingMode?.[request.model]
 
     // 用于检测 <thinking> 标签
     let textBuffer = ''
@@ -679,12 +679,20 @@ export class ProxyServer {
     try {
       let kiroPayload = openaiToKiro(request, account.profileArn)
 
-      // 注入 thinking 提示
+      // 注入 thinking 提示到系统消息位置
       if (thinkingEnabled) {
-        const thinkingPrompt = `<thinking_mode>enabled</thinking_mode>\n<max_thinking_length>200000</max_thinking_length>\n\n`
-        const currentMessage = kiroPayload.conversationState?.currentMessage?.userInputMessage
-        if (currentMessage && typeof currentMessage.content === 'string') {
-          currentMessage.content = thinkingPrompt + currentMessage.content
+        const thinkingPrompt = `<thinking_mode>enabled</thinking_mode>\n<max_thinking_length>200000</max_thinking_length>`
+        const history = kiroPayload.conversationState?.history
+        if (history && history.length > 0 && history[0].userInputMessage) {
+          const content = history[0].userInputMessage.content
+          if (typeof content === 'string' && !content.includes('<thinking_mode>')) {
+            history[0].userInputMessage.content = thinkingPrompt + '\n\n' + content
+          }
+        } else {
+          const currentMessage = kiroPayload.conversationState?.currentMessage?.userInputMessage
+          if (currentMessage && typeof currentMessage.content === 'string' && !currentMessage.content.includes('<thinking_mode>')) {
+            currentMessage.content = thinkingPrompt + '\n\n' + currentMessage.content
+          }
         }
         logger.info('Thinking mode enabled for OpenAI request')
       }
@@ -832,21 +840,41 @@ export class ProxyServer {
 
     const startTime = Date.now()
 
+    // 检查是否为 WebSearch 请求，完全绕过 Kiro generateAssistantResponse
+    if (hasWebSearchTool(request)) {
+      logger.info('WebSearch tool detected, routing to WebSearch handler')
+      try {
+        await handleWebSearchStream(request, account, callbacks, matchedApiKey)
+      } catch (error) {
+        callbacks.onError(error as Error)
+      }
+      return
+    }
+
     // 检查是否启用 Thinking 模式
     const modelThinkingEnabled = this.config.modelThinkingMode?.[request.model]
     const headerThinking = headers?.['anthropic-beta']?.toLowerCase().includes('thinking')
-		console.log("TCL: headers", headers)
-    const thinkingEnabled = modelThinkingEnabled || headerThinking
+    const requestThinking = request.thinking?.type === 'enabled'
+    const thinkingEnabled = modelThinkingEnabled || headerThinking || requestThinking
 
     try {
       let kiroPayload = claudeToKiro(request, account.profileArn)
 
-      // 注入 thinking 提示
+      // 注入 thinking 提示到系统消息位置（payload 第一条 history user 消息前）
       if (thinkingEnabled) {
-        const thinkingPrompt = `<thinking_mode>enabled</thinking_mode>\n<max_thinking_length>200000</max_thinking_length>\n\n`
-        const currentMessage = kiroPayload.conversationState?.currentMessage?.userInputMessage
-        if (currentMessage && typeof currentMessage.content === 'string') {
-          currentMessage.content = thinkingPrompt + currentMessage.content
+        const thinkingPrompt = `<thinking_mode>enabled</thinking_mode>\n<max_thinking_length>${request.thinking?.budget_tokens || 200000}</max_thinking_length>`
+        const history = kiroPayload.conversationState?.history
+        if (history && history.length > 0 && history[0].userInputMessage) {
+          const content = history[0].userInputMessage.content
+          if (typeof content === 'string' && !content.includes('<thinking_mode>')) {
+            history[0].userInputMessage.content = thinkingPrompt + '\n\n' + content
+          }
+        } else {
+          // 没有 history，注入到 currentMessage
+          const currentMessage = kiroPayload.conversationState?.currentMessage?.userInputMessage
+          if (currentMessage && typeof currentMessage.content === 'string' && !currentMessage.content.includes('<thinking_mode>')) {
+            currentMessage.content = thinkingPrompt + '\n\n' + currentMessage.content
+          }
         }
         logger.info('Thinking mode enabled for Claude request')
       }
@@ -908,65 +936,104 @@ export class ProxyServer {
     let hasStartedTextBlock = false
     let collectedContent = ''
     const pendingToolCalls: Map<string, { name: string; input: Record<string, unknown> }> = new Map()
-    let hasLoggedThinkingFormat = false
-    const format = this.config.thinkingOutputFormat || 'thinking'
 
-    // 用于检测 <thinking> 标签
+    // Thinking 块状态
+    let hasStartedThinkingBlock = false
+    let thinkingBlockIndex = -1
+
+    // 用于检测 <thinking> 标签（prompt 注入模式下的文本解析）
     let textBuffer = ''
-    let inThinkingBlock = false
+    let inThinkingTagBlock = false
 
     // 估算输入 tokens
     const estimatedInputTokens = Math.max(1, Math.round(JSON.stringify(kiroPayload).length / 3))
+
+    // 关闭 thinking 块的辅助函数
+    const closeThinkingBlock = () => {
+      if (!hasStartedThinkingBlock) return
+      // 发送空 thinking_delta 作为关闭信号
+      const emptyDelta = createClaudeStreamEvent('content_block_delta', {
+        index: thinkingBlockIndex,
+        delta: { type: 'thinking_delta', thinking: '' }
+      })
+      callbacks.onChunk(`event: content_block_delta\ndata: ${JSON.stringify(emptyDelta)}\n\n`)
+      // 发送 content_block_stop
+      const blockStop = createClaudeStreamEvent('content_block_stop', { index: thinkingBlockIndex })
+      callbacks.onChunk(`event: content_block_stop\ndata: ${JSON.stringify(blockStop)}\n\n`)
+      currentBlockIndex++
+      hasStartedThinkingBlock = false
+    }
+
+    // 发送 thinking 内容的辅助函数
+    const sendThinkingDelta = (thinkingText: string) => {
+      if (!hasStartedThinkingBlock) {
+        // 先关闭 text 块（如果有）
+        if (hasStartedTextBlock) {
+          const blockStop = createClaudeStreamEvent('content_block_stop', { index: currentBlockIndex })
+          callbacks.onChunk(`event: content_block_stop\ndata: ${JSON.stringify(blockStop)}\n\n`)
+          currentBlockIndex++
+          hasStartedTextBlock = false
+        }
+        // 开始 thinking 块
+        thinkingBlockIndex = currentBlockIndex
+        const blockStart = createClaudeStreamEvent('content_block_start', {
+          index: thinkingBlockIndex,
+          content_block: { type: 'thinking', thinking: '' }
+        })
+        callbacks.onChunk(`event: content_block_start\ndata: ${JSON.stringify(blockStart)}\n\n`)
+        hasStartedThinkingBlock = true
+      }
+      if (thinkingText) {
+        const delta = createClaudeStreamEvent('content_block_delta', {
+          index: thinkingBlockIndex,
+          delta: { type: 'thinking_delta', thinking: thinkingText }
+        })
+        callbacks.onChunk(`event: content_block_delta\ndata: ${JSON.stringify(delta)}\n\n`)
+      }
+    }
+
+    // 发送 text 内容的辅助函数
+    const sendTextDelta = (text: string) => {
+      if (!text) return
+      // 先关闭 thinking 块（如果有）
+      if (hasStartedThinkingBlock) {
+        closeThinkingBlock()
+      }
+      collectedContent += text
+      if (!hasStartedTextBlock) {
+        const blockStart = createClaudeStreamEvent('content_block_start', {
+          index: currentBlockIndex,
+          content_block: { type: 'text', text: '' }
+        })
+        callbacks.onChunk(`event: content_block_start\ndata: ${JSON.stringify(blockStart)}\n\n`)
+        hasStartedTextBlock = true
+      }
+      const delta = createClaudeStreamEvent('content_block_delta', {
+        index: currentBlockIndex,
+        delta: { type: 'text_delta', text }
+      })
+      callbacks.onChunk(`event: content_block_delta\ndata: ${JSON.stringify(delta)}\n\n`)
+    }
 
     // 处理文本输出，检测并转换 <thinking> 标签
     const processClaudeText = (text: string, forceFlush = false) => {
       textBuffer += text
 
       while (true) {
-        if (!inThinkingBlock) {
+        if (!inThinkingTagBlock) {
           const thinkingStart = textBuffer.indexOf('<thinking>')
           if (thinkingStart !== -1) {
+            // 输出 <thinking> 之前的内容作为 text
             if (thinkingStart > 0) {
-              const beforeThinking = textBuffer.substring(0, thinkingStart)
-              collectedContent += beforeThinking
-              if (!hasStartedTextBlock) {
-                const blockStart = createClaudeStreamEvent('content_block_start', {
-                  index: currentBlockIndex,
-                  content_block: { type: 'text', text: '' }
-                })
-                callbacks.onChunk(`event: content_block_start\ndata: ${JSON.stringify(blockStart)}\n\n`)
-                hasStartedTextBlock = true
-              }
-              const delta = createClaudeStreamEvent('content_block_delta', {
-                index: currentBlockIndex,
-                delta: { type: 'text_delta', text: beforeThinking }
-              })
-              callbacks.onChunk(`event: content_block_delta\ndata: ${JSON.stringify(delta)}\n\n`)
+              sendTextDelta(textBuffer.substring(0, thinkingStart))
             }
             textBuffer = textBuffer.substring(thinkingStart + 10)
-            inThinkingBlock = true
-            if (!hasLoggedThinkingFormat) {
-              logger.info('Detected <thinking> tag in Claude response', { format })
-              hasLoggedThinkingFormat = true
-            }
+            inThinkingTagBlock = true
           } else if (forceFlush || textBuffer.length > 50) {
+            // 保留末尾可能是部分 <thinking> 标签的内容
             const safeLength = forceFlush ? textBuffer.length : Math.max(0, textBuffer.length - 15)
             if (safeLength > 0) {
-              const safeText = textBuffer.substring(0, safeLength)
-              collectedContent += safeText
-              if (!hasStartedTextBlock) {
-                const blockStart = createClaudeStreamEvent('content_block_start', {
-                  index: currentBlockIndex,
-                  content_block: { type: 'text', text: '' }
-                })
-                callbacks.onChunk(`event: content_block_start\ndata: ${JSON.stringify(blockStart)}\n\n`)
-                hasStartedTextBlock = true
-              }
-              const delta = createClaudeStreamEvent('content_block_delta', {
-                index: currentBlockIndex,
-                delta: { type: 'text_delta', text: safeText }
-              })
-              callbacks.onChunk(`event: content_block_delta\ndata: ${JSON.stringify(delta)}\n\n`)
+              sendTextDelta(textBuffer.substring(0, safeLength))
               textBuffer = textBuffer.substring(safeLength)
             }
             break
@@ -976,45 +1043,29 @@ export class ProxyServer {
         } else {
           const thinkingEnd = textBuffer.indexOf('</thinking>')
           if (thinkingEnd !== -1) {
+            // 提取 thinking 内容，发送为 thinking_delta
             const thinkingContent = textBuffer.substring(0, thinkingEnd)
-            if (thinkingContent && (format === 'thinking' || format === 'think')) {
-              if (!hasStartedTextBlock) {
-                const blockStart = createClaudeStreamEvent('content_block_start', {
-                  index: currentBlockIndex,
-                  content_block: { type: 'text', text: '' }
-                })
-                callbacks.onChunk(`event: content_block_start\ndata: ${JSON.stringify(blockStart)}\n\n`)
-                hasStartedTextBlock = true
-              }
-              const tag = format === 'thinking' ? 'thinking' : 'think'
-              const delta = createClaudeStreamEvent('content_block_delta', {
-                index: currentBlockIndex,
-                delta: { type: 'text_delta', text: `<${tag}>${thinkingContent}</${tag}>` }
-              })
-              callbacks.onChunk(`event: content_block_delta\ndata: ${JSON.stringify(delta)}\n\n`)
+            if (thinkingContent) {
+              sendThinkingDelta(thinkingContent)
             }
+            // 关闭 thinking 块
+            closeThinkingBlock()
             textBuffer = textBuffer.substring(thinkingEnd + 11)
-            inThinkingBlock = false
+            inThinkingTagBlock = false
           } else if (forceFlush && textBuffer) {
-            if (format === 'thinking' || format === 'think') {
-              if (!hasStartedTextBlock) {
-                const blockStart = createClaudeStreamEvent('content_block_start', {
-                  index: currentBlockIndex,
-                  content_block: { type: 'text', text: '' }
-                })
-                callbacks.onChunk(`event: content_block_start\ndata: ${JSON.stringify(blockStart)}\n\n`)
-                hasStartedTextBlock = true
-              }
-              const tag = format === 'thinking' ? 'thinking' : 'think'
-              const delta = createClaudeStreamEvent('content_block_delta', {
-                index: currentBlockIndex,
-                delta: { type: 'text_delta', text: `<${tag}>${textBuffer}</${tag}>` }
-              })
-              callbacks.onChunk(`event: content_block_delta\ndata: ${JSON.stringify(delta)}\n\n`)
-            }
+            // 流结束但 thinking 未闭合，flush 剩余内容
+            sendThinkingDelta(textBuffer)
+            closeThinkingBlock()
             textBuffer = ''
+            inThinkingTagBlock = false
             break
           } else {
+            // 保留末尾可能是部分 </thinking> 标签的内容，其余作为 thinking_delta 发送
+            const safeLength = Math.max(0, textBuffer.length - 15)
+            if (safeLength > 0) {
+              sendThinkingDelta(textBuffer.substring(0, safeLength))
+              textBuffer = textBuffer.substring(safeLength)
+            }
             break
           }
         }
@@ -1045,27 +1096,21 @@ export class ProxyServer {
         (text, toolUse, isThinking) => {
           if (text) {
             if (isThinking) {
-              if (format === 'thinking' || format === 'think') {
-                if (!hasStartedTextBlock) {
-                  const blockStart = createClaudeStreamEvent('content_block_start', {
-                    index: currentBlockIndex,
-                    content_block: { type: 'text', text: '' }
-                  })
-                  callbacks.onChunk(`event: content_block_start\ndata: ${JSON.stringify(blockStart)}\n\n`)
-                  hasStartedTextBlock = true
-                }
-                const tag = format === 'thinking' ? 'thinking' : 'think'
-                const delta = createClaudeStreamEvent('content_block_delta', {
-                  index: currentBlockIndex,
-                  delta: { type: 'text_delta', text: `<${tag}>${text}</${tag}>` }
-                })
-                callbacks.onChunk(`event: content_block_delta\ndata: ${JSON.stringify(delta)}\n\n`)
-              }
+              // reasoningContentEvent: 作为 thinking content block 发送
+              sendThinkingDelta(text)
             } else {
               processClaudeText(text)
             }
           }
           if (toolUse) {
+            // 先关闭 thinking 块（如果有）
+            if (hasStartedThinkingBlock) {
+              closeThinkingBlock()
+            }
+            // 刷新文本缓冲区
+            if (textBuffer) {
+              processClaudeText('', true)
+            }
             // 结束之前的文本块
             if (hasStartedTextBlock) {
               const blockStop = createClaudeStreamEvent('content_block_stop', { index: currentBlockIndex })
@@ -1097,6 +1142,11 @@ export class ProxyServer {
         async (usage) => {
           // 刷新缓冲区
           processClaudeText('', true)
+
+          // 关闭 thinking 块（如果还在）
+          if (hasStartedThinkingBlock) {
+            closeThinkingBlock()
+          }
 
           // 结束最后的文本块
           if (hasStartedTextBlock) {
