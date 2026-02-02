@@ -552,14 +552,17 @@ function extractClaudeContent(msg: ClaudeMessage): { content: string; images: Ki
 
 function extractClaudeAssistantContent(msg: ClaudeMessage): { content: string; toolUses: KiroToolUse[] } {
   const toolUses: KiroToolUse[] = []
-  let content = ''
+  let thinkingContent = ''
+  let textContent = ''
 
   if (typeof msg.content === 'string') {
-    content = msg.content
+    textContent = msg.content
   } else if (Array.isArray(msg.content)) {
     for (const block of msg.content) {
-      if (block.type === 'text' && block.text) {
-        content += block.text
+      if (block.type === 'thinking' && block.thinking) {
+        thinkingContent += block.thinking
+      } else if (block.type === 'text' && block.text) {
+        textContent += block.text
       } else if (block.type === 'tool_use' && block.id && block.name) {
         toolUses.push({
           toolUseId: block.id,
@@ -569,6 +572,13 @@ function extractClaudeAssistantContent(msg: ClaudeMessage): { content: string; t
       }
     }
   }
+
+  // 将 thinking 内容以 <thinking> 标签包裹后拼接到正文前面，供上游理解上下文
+  let content = ''
+  if (thinkingContent) {
+    content = `<thinking>${thinkingContent}</thinking>\n\n`
+  }
+  content += textContent
 
   if (!content.trim() && toolUses.length > 0) {
     content = 'Using tools.'
