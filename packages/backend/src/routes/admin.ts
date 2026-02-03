@@ -10,6 +10,7 @@ import * as configStore from '../storage/configStore.js'
 import { checkRedisHealth } from '../storage/redis.js'
 import { v4 as uuidv4 } from 'uuid'
 import type { ApiResponse } from '../core/types.js'
+import { getClaudePrices, updatePriceFromRemote, findModelPrice } from '../core/pricing.js'
 
 const logger = createLogger('AdminRoute')
 const router: IRouter = Router()
@@ -204,6 +205,59 @@ router.get('/health', async (_req: Request, res: Response) => {
         status: 'unhealthy',
         error: (error as Error).message
       }
+    } as ApiResponse)
+  }
+})
+
+
+/**
+ * 获取价格表（Claude 模型）
+ * GET /api/admin/prices
+ */
+router.get('/prices', async (req: Request, res: Response) => {
+  try {
+    const model = req.query.model as string | undefined
+    if (model) {
+      const price = findModelPrice(model)
+      res.json({ success: true, data: price } as ApiResponse)
+    } else {
+      const prices = getClaudePrices()
+      res.json({ success: true, data: prices } as ApiResponse)
+    }
+  } catch (error) {
+    logger.error('Failed to get prices', { error: (error as Error).message })
+    res.status(500).json({
+      success: false,
+      error: { message: (error as Error).message }
+    } as ApiResponse)
+  }
+})
+
+/**
+ * 从远程更新价格表
+ * POST /api/admin/prices/update
+ */
+router.post('/prices/update', async (req: Request, res: Response) => {
+  try {
+    const { url } = req.body || {}
+    const result = await updatePriceFromRemote(url)
+
+    if (result.success) {
+      res.json({
+        success: true,
+        data: { modelCount: result.modelCount, message: 'Price config updated successfully' }
+      } as ApiResponse)
+    } else {
+      res.status(500).json({
+        success: false,
+        error: { message: result.error || 'Failed to update prices' }
+      } as ApiResponse)
+    }
+  } catch (error) {
+    logger.error('Failed to update prices', { error: (error as Error).message })
+    res.status(500).json({
+      success: false,
+      error: { message: (error as Error).message }
     } as ApiResponse)
   }
 })

@@ -59,6 +59,9 @@ export interface OpenAIChatResponse {
     prompt_tokens: number
     completion_tokens: number
     total_tokens: number
+    prompt_tokens_details?: {
+      cached_tokens?: number
+    }
   }
 }
 
@@ -116,6 +119,7 @@ export interface ClaudeMessage {
 export interface ClaudeSystemBlock {
   type: 'text'
   text: string
+  cache_control?: { type: 'ephemeral' }
 }
 
 export interface ClaudeContentBlock {
@@ -128,6 +132,7 @@ export interface ClaudeContentBlock {
   input?: unknown
   tool_use_id?: string
   content?: string | ClaudeContentBlock[]
+  cache_control?: { type: 'ephemeral' }
 }
 
 export interface ClaudeTool {
@@ -149,6 +154,8 @@ export interface ClaudeResponse {
   usage: {
     input_tokens: number
     output_tokens: number
+    cache_creation_input_tokens?: number
+    cache_read_input_tokens?: number
   }
 }
 
@@ -362,17 +369,20 @@ export interface ApiKey {
     totalCredits: number
     totalInputTokens: number
     totalOutputTokens: number
+    totalCost: number
     daily: Record<string, {
       requests: number
       credits: number
       inputTokens: number
       outputTokens: number
+      cost: number
     }>
     byModel?: Record<string, {
       requests: number
       credits: number
       inputTokens: number
       outputTokens: number
+      cost: number
     }>
   }
 
@@ -383,6 +393,7 @@ export interface ApiKey {
     inputTokens: number
     outputTokens: number
     credits: number
+    cost: number
     path: string
   }>
 }
@@ -397,6 +408,9 @@ export interface ProxyStats {
   totalCredits: number
   inputTokens: number
   outputTokens: number
+  totalCost: number
+  cacheCreationTokens: number
+  cacheReadTokens: number
   startTime: number
   // 扩展统计
   accountStats: Map<string, AccountStats>
@@ -414,6 +428,7 @@ export interface AccountStats {
   lastUsed: number
   avgResponseTime: number
   totalResponseTime: number
+  totalCost: number
 }
 
 export interface EndpointStats {
@@ -442,6 +457,9 @@ export interface RequestLog {
   inputTokens: number
   outputTokens: number
   credits?: number
+  cacheCreationTokens?: number
+  cacheReadTokens?: number
+  cost?: number
   responseTime: number
   success: boolean
   error?: string

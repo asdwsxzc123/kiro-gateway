@@ -35,6 +35,14 @@ import { callKiroApiStream, callKiroApi } from './kiroApi.js'
 import { createLogger } from '../utils/logger.js'
 import { refreshTokenByMethod, needsTokenRefresh } from './tokenRefresh.js'
 import { hasWebSearchTool, handleWebSearchStream } from './websearch.js'
+import * as logStore from '../storage/logStore.js'
+import * as statsStore from '../storage/statsStore.js'
+import * as dailyStatsStore from '../storage/dailyStatsStore.js'
+import * as apiKeyStore from '../storage/apiKeyStore.js'
+import { calculateCost } from './pricing.js'
+import { calculateCacheRatio, splitTokensByRatio } from './cacheTracker.js'
+import type { CacheRatio, CacheCalculation } from './cacheTracker.js'
+import { computeSessionHash, getSessionAccount, setSessionAccount } from './sessionCache.js'
 
 const logger = createLogger('ProxyServer')
 
@@ -90,6 +98,9 @@ export class ProxyServer {
       totalCredits: 0,
       inputTokens: 0,
       outputTokens: 0,
+      totalCost: 0,
+      cacheCreationTokens: 0,
+      cacheReadTokens: 0,
       startTime: Date.now(),
       accountStats: new Map(),
       endpointStats: new Map(),
@@ -164,6 +175,7 @@ export class ProxyServer {
     credits: number,
     inputTokens: number,
     outputTokens: number,
+    cost: number,
     model: string,
     path: string
   ): void {
@@ -177,26 +189,29 @@ export class ProxyServer {
     apiKey.usage.totalCredits += credits
     apiKey.usage.totalInputTokens += inputTokens
     apiKey.usage.totalOutputTokens += outputTokens
+    apiKey.usage.totalCost += cost
     apiKey.lastUsedAt = Date.now()
 
     // 更新日统计
     if (!apiKey.usage.daily[today]) {
-      apiKey.usage.daily[today] = { requests: 0, credits: 0, inputTokens: 0, outputTokens: 0 }
+      apiKey.usage.daily[today] = { requests: 0, credits: 0, inputTokens: 0, outputTokens: 0, cost: 0 }
     }
     apiKey.usage.daily[today].requests++
     apiKey.usage.daily[today].credits += credits
     apiKey.usage.daily[today].inputTokens += inputTokens
     apiKey.usage.daily[today].outputTokens += outputTokens
+    apiKey.usage.daily[today].cost += cost
 
     // 更新模型统计
     if (!apiKey.usage.byModel) apiKey.usage.byModel = {}
     if (!apiKey.usage.byModel[model]) {
-      apiKey.usage.byModel[model] = { requests: 0, credits: 0, inputTokens: 0, outputTokens: 0 }
+      apiKey.usage.byModel[model] = { requests: 0, credits: 0, inputTokens: 0, outputTokens: 0, cost: 0 }
     }
     apiKey.usage.byModel[model].requests++
     apiKey.usage.byModel[model].credits += credits
     apiKey.usage.byModel[model].inputTokens += inputTokens
     apiKey.usage.byModel[model].outputTokens += outputTokens
+    apiKey.usage.byModel[model].cost += cost
 
     // 添加到用量历史
     if (!apiKey.usageHistory) apiKey.usageHistory = []
@@ -206,12 +221,34 @@ export class ProxyServer {
       inputTokens,
       outputTokens,
       credits,
+      cost,
       path
     })
     // 保留最近 100 条
     if (apiKey.usageHistory.length > 100) {
       apiKey.usageHistory = apiKey.usageHistory.slice(0, 100)
     }
+
+    // 持久化到 Redis
+    apiKeyStore.updateDailyApiKeyStats(
+      apiKeyId,
+      credits,
+      inputTokens,
+      outputTokens,
+      cost
+    ).catch(err => {
+      logger.error('Failed to persist API key daily stats', { error: (err as Error).message })
+    })
+
+    apiKeyStore.updateApiKeyTotalStats(
+      apiKeyId,
+      credits,
+      inputTokens,
+      outputTokens,
+      cost
+    ).catch(err => {
+      logger.error('Failed to persist API key total stats', { error: (err as Error).message })
+    })
   }
 
   // ============ Token 刷新 ============
@@ -322,9 +359,13 @@ export class ProxyServer {
       path: log.path || '',
       model: log.model || '',
       accountId: log.accountId || '',
+      machineId: log.machineId,
       inputTokens: log.inputTokens || 0,
       outputTokens: log.outputTokens || 0,
       credits: log.credits,
+      cacheCreationTokens: log.cacheCreationTokens,
+      cacheReadTokens: log.cacheReadTokens,
+      cost: log.cost,
       responseTime: log.responseTime || 0,
       success: log.success ?? true,
       error: log.error
@@ -336,6 +377,11 @@ export class ProxyServer {
     }
 
     this.events.onStatsUpdate?.(this.stats)
+
+    // 写入 Redis 持久化日志
+    logStore.addRequestLog(requestLog).catch(err => {
+      logger.error('Failed to persist request log', { error: (err as Error).message })
+    })
   }
 
   // ============ 重试机制 ============
@@ -447,12 +493,19 @@ export class ProxyServer {
         outputTokens: result.usage.outputTokens
       })
 
+      const cacheWrite1 = (result.usage as Record<string, number>).cacheWriteTokens || 0
+      const cacheRead1 = (result.usage as Record<string, number>).cacheReadTokens || 0
+      const cost1 = calculateCost(request.model, result.usage.inputTokens, result.usage.outputTokens, cacheWrite1, cacheRead1)
       this.recordRequest({
         path: '/v1/chat/completions',
         model: request.model,
         accountId: usedAccount.id,
+        machineId: usedAccount.machineId,
         inputTokens: result.usage.inputTokens,
         outputTokens: result.usage.outputTokens,
+        cacheCreationTokens: cacheWrite1,
+        cacheReadTokens: cacheRead1,
+        cost: cost1.totalCost,
         responseTime: Date.now() - startTime,
         success: true
       })
@@ -491,13 +544,28 @@ export class ProxyServer {
     this.recordNewRequest()
     this.events.onRequest?.({ path: '/v1/messages', method: 'POST' })
 
-    const account = await this.getAvailableAccount()
+    // Sticky Session: try routing to bound account
+    const sessionHash = computeSessionHash(request, _headers?.['x-session-id'])
+    let account: ProxyAccount | null = null
+
+    if (sessionHash) {
+      const stickyAccountId = await getSessionAccount(sessionHash)
+      if (stickyAccountId) {
+        account = this.accountPool.getAccountIfAvailable(stickyAccountId)
+      }
+    }
+    if (!account) {
+      account = await this.getAvailableAccount()
+    }
     if (!account) {
       this.recordRequestFailed()
       return { success: false, error: 'No available accounts' }
     }
 
     const startTime = Date.now()
+
+    // Calculate cache ratio (atomic check + write)
+    const cacheRatio = await calculateCacheRatio(account.id, request)
 
     try {
       const { result, account: usedAccount } = await this.callWithRetry(
@@ -523,12 +591,93 @@ export class ProxyServer {
         outputTokens: result.usage.outputTokens
       })
 
+      // Split tokens by cache ratio
+      const cacheCalc = splitTokensByRatio(cacheRatio, result.usage.inputTokens)
+
+      // Bind Sticky Session
+      if (sessionHash) {
+        setSessionAccount(sessionHash, usedAccount.id).catch(() => {})
+      }
+
+      // Cache-aware cost calculation
+      const cost2 = calculateCost(
+        request.model,
+        cacheCalc.totalInputTokens,
+        result.usage.outputTokens,
+        cacheCalc.cacheCreationTokens,
+        cacheCalc.cacheReadTokens
+      )
+
+      // Update memory stats
+      this.stats.cacheCreationTokens += cacheCalc.cacheCreationTokens
+      this.stats.cacheReadTokens += cacheCalc.cacheReadTokens
+
+      // Persist to Redis
+      statsStore.updateGlobalStats(
+        true,
+        result.usage.inputTokens,
+        result.usage.outputTokens,
+        0,
+        cost2.totalCost,
+        cacheCalc.cacheCreationTokens,
+        cacheCalc.cacheReadTokens
+      ).catch(err => {
+        logger.error('Failed to persist global stats', { error: (err as Error).message })
+      })
+
+      // Update daily stats
+      const today = new Date().toISOString().split('T')[0]
+
+      // 更新全局日统计
+      await dailyStatsStore.updateDailyGlobalStats(
+        today,
+        true,
+        result.usage.inputTokens,
+        result.usage.outputTokens,
+        0,
+        cost2.totalCost,
+        cacheCalc.cacheCreationTokens,
+        cacheCalc.cacheReadTokens
+      ).catch(err => {
+        logger.error('Failed to persist daily global stats', { error: (err as Error).message })
+      })
+
+      // 更新账号日统计
+      await dailyStatsStore.updateDailyAccountStats(
+        usedAccount.id,
+        today,
+        true,
+        result.usage.inputTokens,
+        result.usage.outputTokens,
+        Date.now() - startTime,
+        cost2.totalCost,
+        cacheCalc.cacheCreationTokens,
+        cacheCalc.cacheReadTokens
+      ).catch(err => {
+        logger.error('Failed to persist daily account stats', { error: (err as Error).message })
+      })
+
+      // 更新模型日统计
+      await dailyStatsStore.updateDailyModelStats(
+        request.model,
+        today,
+        result.usage.inputTokens,
+        result.usage.outputTokens,
+        cost2.totalCost
+      ).catch(err => {
+        logger.error('Failed to persist daily model stats', { error: (err as Error).message })
+      })
+
       this.recordRequest({
         path: '/v1/messages',
         model: request.model,
         accountId: usedAccount.id,
-        inputTokens: result.usage.inputTokens,
+        machineId: usedAccount.machineId,
+        inputTokens: cacheCalc.uncachedTokens,
         outputTokens: result.usage.outputTokens,
+        cacheCreationTokens: cacheCalc.cacheCreationTokens,
+        cacheReadTokens: cacheCalc.cacheReadTokens,
+        cost: cost2.totalCost,
         responseTime: Date.now() - startTime,
         success: true
       })
@@ -769,19 +918,24 @@ export class ProxyServer {
               credits: usage.credits
             })
 
+            const costStream1 = calculateCost(request.model, usage.inputTokens, usage.outputTokens, usage.cacheWriteTokens || 0, usage.cacheReadTokens || 0)
             this.recordRequest({
               path: '/v1/chat/completions',
               model: request.model,
               accountId: account.id,
+              machineId: account.machineId,
               inputTokens: usage.inputTokens,
               outputTokens: usage.outputTokens,
+              cacheCreationTokens: usage.cacheWriteTokens || 0,
+              cacheReadTokens: usage.cacheReadTokens || 0,
+              cost: costStream1.totalCost,
               credits: usage.credits,
               responseTime: Date.now() - startTime,
               success: true
             })
 
             if (matchedApiKey) {
-              this.recordApiKeyUsage(matchedApiKey.id, usage.credits || 0, usage.inputTokens, usage.outputTokens, request.model, '/v1/chat/completions')
+              this.recordApiKeyUsage(matchedApiKey.id, usage.credits || 0, usage.inputTokens, usage.outputTokens, costStream1.totalCost, request.model, '/v1/chat/completions')
             }
 
             resolve()
@@ -831,7 +985,19 @@ export class ProxyServer {
     this.recordNewRequest()
     this.events.onRequest?.({ path: '/v1/messages', method: 'POST' })
 
-    const account = await this.getAvailableAccount()
+    // Sticky Session: try routing to bound account
+    const sessionHash = computeSessionHash(request, headers?.['x-session-id'])
+    let account: ProxyAccount | null = null
+
+    if (sessionHash) {
+      const stickyAccountId = await getSessionAccount(sessionHash)
+      if (stickyAccountId) {
+        account = this.accountPool.getAccountIfAvailable(stickyAccountId)
+      }
+    }
+    if (!account) {
+      account = await this.getAvailableAccount()
+    }
     if (!account) {
       this.recordRequestFailed()
       callbacks.onError(new Error('No available accounts'))
@@ -879,6 +1045,9 @@ export class ProxyServer {
         logger.info('Thinking mode enabled for Claude request')
       }
 
+      // Calculate cache ratio before the API call
+      const cacheRatio = await calculateCacheRatio(account.id, request)
+
       await this.handleClaudeStream(
         callbacks,
         account,
@@ -889,7 +1058,9 @@ export class ProxyServer {
         undefined,
         false,
         0,
-        matchedApiKey
+        matchedApiKey,
+        cacheRatio,
+        sessionHash
       )
 
       callbacks.onComplete()
@@ -929,7 +1100,9 @@ export class ProxyServer {
     msgId?: string,
     _headersSent: boolean = false,
     contentBlockIndex: number = 0,
-    matchedApiKey?: ApiKey
+    matchedApiKey?: ApiKey,
+    cacheRatio?: CacheRatio | null,
+    sessionHash?: string | null
   ): Promise<void> {
     const id = msgId || `msg_${uuidv4()}`
     let currentBlockIndex = contentBlockIndex
@@ -1162,6 +1335,19 @@ export class ProxyServer {
           this.stats.totalCredits += usage.credits || 0
           this.accountPool.recordSuccess(account.id, usage.inputTokens + usage.outputTokens)
 
+          // Split tokens by cache ratio (only when ratio was calculated in first round)
+          let cacheCalc: CacheCalculation | null = null
+          if (cacheRatio) {
+            cacheCalc = splitTokensByRatio(cacheRatio, usage.inputTokens)
+            this.stats.cacheCreationTokens += cacheCalc.cacheCreationTokens
+            this.stats.cacheReadTokens += cacheCalc.cacheReadTokens
+          }
+
+          // Bind Sticky Session
+          if (sessionHash) {
+            setSessionAccount(sessionHash, account.id).catch(() => {})
+          }
+
           this.events.onResponse?.({
             path: '/v1/messages',
             model,
@@ -1172,19 +1358,85 @@ export class ProxyServer {
             credits: usage.credits
           })
 
+          const costStream2 = calculateCost(
+            model,
+            cacheCalc ? cacheCalc.totalInputTokens : usage.inputTokens,
+            usage.outputTokens,
+            cacheCalc?.cacheCreationTokens ?? (usage.cacheWriteTokens || 0),
+            cacheCalc?.cacheReadTokens ?? (usage.cacheReadTokens || 0)
+          )
           this.recordRequest({
             path: '/v1/messages',
             model,
             accountId: account.id,
-            inputTokens: usage.inputTokens,
+            machineId: account.machineId,
+            inputTokens: cacheCalc?.uncachedTokens ?? usage.inputTokens,
             outputTokens: usage.outputTokens,
+            cacheCreationTokens: cacheCalc?.cacheCreationTokens ?? (usage.cacheWriteTokens || 0),
+            cacheReadTokens: cacheCalc?.cacheReadTokens ?? (usage.cacheReadTokens || 0),
+            cost: costStream2.totalCost,
             credits: usage.credits,
             responseTime: Date.now() - startTime,
             success: true
           })
 
+          statsStore.updateGlobalStats(
+            true,
+            usage.inputTokens,
+            usage.outputTokens,
+            usage.credits || 0,
+            costStream2.totalCost,
+            cacheCalc?.cacheCreationTokens ?? 0,
+            cacheCalc?.cacheReadTokens ?? 0
+          ).catch(err => {
+            logger.error('Failed to persist global stats', { error: (err as Error).message })
+          })
+
+          // Update daily stats
+          const today = new Date().toISOString().split('T')[0]
+
+          // 更新全局日统计
+          await dailyStatsStore.updateDailyGlobalStats(
+            today,
+            true,
+            usage.inputTokens,
+            usage.outputTokens,
+            usage.credits || 0,
+            costStream2.totalCost,
+            cacheCalc?.cacheCreationTokens ?? 0,
+            cacheCalc?.cacheReadTokens ?? 0
+          ).catch(err => {
+            logger.error('Failed to persist daily global stats', { error: (err as Error).message })
+          })
+
+          // 更新账号日统计
+          await dailyStatsStore.updateDailyAccountStats(
+            account.id,
+            today,
+            true,
+            usage.inputTokens,
+            usage.outputTokens,
+            Date.now() - startTime,
+            costStream2.totalCost,
+            cacheCalc?.cacheCreationTokens ?? 0,
+            cacheCalc?.cacheReadTokens ?? 0
+          ).catch(err => {
+            logger.error('Failed to persist daily account stats', { error: (err as Error).message })
+          })
+
+          // 更新模型日统计
+          await dailyStatsStore.updateDailyModelStats(
+            model,
+            today,
+            usage.inputTokens,
+            usage.outputTokens,
+            costStream2.totalCost
+          ).catch(err => {
+            logger.error('Failed to persist daily model stats', { error: (err as Error).message })
+          })
+
           if (matchedApiKey) {
-            this.recordApiKeyUsage(matchedApiKey.id, usage.credits || 0, usage.inputTokens, usage.outputTokens, model, '/v1/messages')
+            this.recordApiKeyUsage(matchedApiKey.id, usage.credits || 0, usage.inputTokens, usage.outputTokens, costStream2.totalCost, model, '/v1/messages')
           }
 
           // 检查是否需要自动继续
@@ -1247,7 +1499,9 @@ export class ProxyServer {
                 id,
                 true,
                 currentBlockIndex,
-                matchedApiKey
+                matchedApiKey,
+                null,          // don't recalculate cache ratio in auto-continue
+                sessionHash    // keep session hash for binding
               )
             } catch (error) {
               logger.error('Claude auto-continue error', { error: (error as Error).message })

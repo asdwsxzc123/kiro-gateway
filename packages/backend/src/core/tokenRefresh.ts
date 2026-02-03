@@ -25,20 +25,20 @@ export async function refreshOidcToken(
 
   const url = `https://oidc.${region}.amazonaws.com/token`
 
-  const params = new URLSearchParams({
-    client_id: clientId,
-    client_secret: clientSecret,
-    refresh_token: refreshToken,
-    grant_type: 'refresh_token'
-  })
+   const payload = {
+    clientId,
+    clientSecret,
+    refreshToken,
+    grantType: 'refresh_token'
+  }
 
   try {
     const response = await fetch(url, {
       method: 'POST',
       headers: {
-        'Content-Type': 'application/x-www-form-urlencoded'
+        'Content-Type': 'application/json'
       },
-      body: params.toString()
+      body: JSON.stringify(payload)
     })
 
     if (!response.ok) {
@@ -48,18 +48,18 @@ export async function refreshOidcToken(
     }
 
     const data = await response.json() as {
-      access_token: string
-      refresh_token?: string
-      expires_in?: number
+      accessToken: string
+      refreshToken?: string
+      expiresIn?: number
     }
 
-    logger.info(`OIDC token refreshed successfully, expires in ${data.expires_in}s`)
+    logger.info(`OIDC token refreshed successfully, expires in ${data.expiresIn}s`)
 
     return {
       success: true,
-      accessToken: data.access_token,
-      refreshToken: data.refresh_token || refreshToken,
-      expiresAt: Date.now() + (data.expires_in || 3600) * 1000
+      accessToken: data.accessToken,
+      refreshToken: data.refreshToken || refreshToken,
+      expiresAt: Date.now() + (data.expiresIn || 3600) * 1000
     }
   } catch (error) {
     logger.error(`OIDC refresh error: ${error}`)

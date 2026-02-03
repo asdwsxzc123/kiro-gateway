@@ -35,6 +35,11 @@ export async function createApp(): Promise<Express> {
   // 限流中间件
   app.use(rateLimitMiddleware)
 
+  // Claude Code 遥测端点 - 直接返回 200 OK（无需认证）
+  app.post('/api/event_logging/batch', (_req, res) => {
+    res.json({ status: 'ok' })
+  })
+
   // JWT 认证（仅管理接口，/v1 代理接口不需要 JWT）
   app.use('/api', jwtAuthMiddleware)
 

@@ -8,7 +8,7 @@ on:
 
 env:
   REGISTRY: docker.io
-  IMAGE_NAME: asdwsxzc123/kiro-gateway
+  IMAGE_NAME: asdwsxzc123/api-gateway
 
 jobs:
   build:

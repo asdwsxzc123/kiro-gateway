@@ -1,6 +1,6 @@
 import { useState } from "react"
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
-import { Copy, Plus, Trash2, Save, Lock } from "lucide-react"
+import { Copy, Plus, Trash2, Save, Lock, ArrowUpDown } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -40,7 +40,8 @@ import {
 import { useToast } from "@/hooks/use-toast"
 import { getConfig, updateConfig, getApiKeys, createApiKey, deleteApiKey } from "@/api/config"
 import { authApi } from "@/api/auth"
-import type { UpdateConfigRequest } from "@kiro-gateway/shared"
+import { getAllApiKeysTodayCost } from "@/api/stats"
+import type { ApiKeyCostData } from "@/api/stats"
 
 /**
  * Settings 页面 - 系统配置
@@ -51,11 +52,16 @@ export function Settings() {
   const queryClient = useQueryClient()
   const [isAddKeyDialogOpen, setIsAddKeyDialogOpen] = useState(false)
   const [newKeyName, setNewKeyName] = useState("")
+  const [sortBy, setSortBy] = useState<"name" | "todayCost" | "totalCost">("name")
+  const [sortOrder, setSortOrder] = useState<"asc" | "desc">("asc")
 
   // 修改密码状态
   const [oldPassword, setOldPassword] = useState("")
   const [newPassword, setNewPassword] = useState("")
   const [confirmPassword, setConfirmPassword] = useState("")
+
+  // 本地配置状态
+  const [localConfig, setLocalConfig] = useState<Record<string, any>>({})
 
   // 获取配置
   const { data: config, isLoading: configLoading } = useQuery({
@@ -69,10 +75,58 @@ export function Settings() {
     queryFn: getApiKeys,
   })
 
-  // 本地配置状态
-  const [localConfig, setLocalConfig] = useState<UpdateConfigRequest>({})
+  // 获取 API Keys 费用数据
+  const { data: apiKeysCostData = [] } = useQuery({
+    queryKey: ["apiKeysCostData"],
+    queryFn: getAllApiKeysTodayCost,
+    refetchInterval: 30 * 1000, // 30秒自动刷新
+  })
 
-  // 更新配置
+  // 格式化费用显示
+  const formatCost = (cost: number): string => {
+    return `$${cost.toFixed(4)}`
+  }
+
+  // 获取 API Key 的费用数据
+  const getApiKeyCostData = (apiKeyId: string): ApiKeyCostData | undefined => {
+    return apiKeysCostData.find(item => item.apiKeyId === apiKeyId)
+  }
+
+  // 合并 API Keys 和费用数据，并排序
+  const mergedApiKeys = (apiKeys || []).map(key => ({
+    ...key,
+    costData: getApiKeyCostData(key.id),
+  })).sort((a, b) => {
+    let compareValue = 0
+
+    if (sortBy === "name") {
+      compareValue = (a.name || "").localeCompare(b.name || "")
+    } else if (sortBy === "todayCost") {
+      compareValue = (a.costData?.todayCost || 0) - (b.costData?.todayCost || 0)
+    } else if (sortBy === "totalCost") {
+      compareValue = (a.costData?.totalCost || 0) - (b.costData?.totalCost || 0)
+    }
+
+    return sortOrder === "asc" ? compareValue : -compareValue
+  })
+
+  // 切换排序
+  const toggleSort = (field: "name" | "todayCost" | "totalCost") => {
+    if (sortBy === field) {
+      setSortOrder(sortOrder === "asc" ? "desc" : "asc")
+    } else {
+      setSortBy(field)
+      setSortOrder("asc")
+    }
+  }
+
+  // 排序指示器
+  const SortIndicator = ({ field }: { field: "name" | "todayCost" | "totalCost" }) => {
+    if (sortBy !== field) return null
+    return (
+      <ArrowUpDown className={`h-4 w-4 inline ml-1 ${sortOrder === "desc" ? "rotate-180" : ""}`} />
+    )
+  }
   const updateMutation = useMutation({
     mutationFn: updateConfig,
     onSuccess: () => {
@@ -319,15 +373,32 @@ export function Settings() {
                 <Table>
                   <TableHeader>
                     <TableRow>
-                      <TableHead>名称</TableHead>
+                      <TableHead
+                        className="cursor-pointer hover:bg-muted"
+                        onClick={() => toggleSort("name")}
+                      >
+                        名称 <SortIndicator field="name" />
+                      </TableHead>
                       <TableHead>Key 预览</TableHead>
                       <TableHead>创建时间</TableHead>
                       <TableHead>最后使用</TableHead>
+                      <TableHead
+                        className="cursor-pointer hover:bg-muted"
+                        onClick={() => toggleSort("todayCost")}
+                      >
+                        今日费用 <SortIndicator field="todayCost" />
+                      </TableHead>
+                      <TableHead
+                        className="cursor-pointer hover:bg-muted"
+                        onClick={() => toggleSort("totalCost")}
+                      >
+                        累计费用 <SortIndicator field="totalCost" />
+                      </TableHead>
                       <TableHead className="text-right">操作</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {apiKeys?.map((apiKey) => (
+                    {mergedApiKeys?.map((apiKey) => (
                       <TableRow key={apiKey.id}>
                         <TableCell className="font-medium">{apiKey.name}</TableCell>
                         <TableCell className="font-mono">
@@ -335,6 +406,12 @@ export function Settings() {
                         </TableCell>
                         <TableCell>{formatDate(apiKey.createdAt)}</TableCell>
                         <TableCell>{formatDate(apiKey.lastUsed)}</TableCell>
+                        <TableCell className="font-semibold text-red-600">
+                          {apiKey.costData ? formatCost(apiKey.costData.todayCost) : "-"}
+                        </TableCell>
+                        <TableCell className="font-semibold text-orange-600">
+                          {apiKey.costData ? formatCost(apiKey.costData.totalCost) : "-"}
+                        </TableCell>
                         <TableCell className="text-right">
                           <div className="flex justify-end gap-2">
                             {/* 复制完整 API Key */}

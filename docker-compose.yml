@@ -4,8 +4,8 @@
 services:
   # Kiro Gateway 服务
   gateway:
-    image: asdwsxzc123/kiro-gateway:latest
-    container_name: kiro-gateway
+    image: asdwsxzc123/api-gateway:latest
+    container_name: api-gateway
     restart: unless-stopped
     ports:
       - "${PORT:-8000}:8000"

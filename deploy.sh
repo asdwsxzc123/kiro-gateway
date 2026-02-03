@@ -14,7 +14,7 @@ set -e
 
 # 配置
 DOCKER_HUB_USERNAME="${DOCKER_HUB_USERNAME:-}"
-IMAGE_NAME="kiro-gateway"
+IMAGE_NAME="api-gateway"
 IMAGE_TAG="${IMAGE_TAG:-latest}"
 
 # 颜色输出

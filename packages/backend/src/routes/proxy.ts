@@ -11,6 +11,7 @@ import { ProxyServer } from '../core/proxyServer.js'
 import type { OpenAIChatRequest, ClaudeRequest } from '../core/types.js'
 import * as accountStore from '../storage/accountStore.js'
 import * as configStore from '../storage/configStore.js'
+import { countAllTokens } from '../core/tokenCounter.js'
 
 const logger = createLogger('ProxyRoute')
 const router: IRouter = Router()
@@ -96,6 +97,9 @@ router.post('/chat/completions', async (req: Request, res: Response) => {
     const headers: Record<string, string> = {}
     if (req.headers['anthropic-beta']) {
       headers['anthropic-beta'] = req.headers['anthropic-beta'] as string
+    }
+    if (req.headers['x-session-id']) {
+      headers['x-session-id'] = req.headers['x-session-id'] as string
     }
 
     if (isStream) {
@@ -189,6 +193,9 @@ router.post('/messages', async (req: Request, res: Response) => {
     if (req.headers['anthropic-beta']) {
       headers['anthropic-beta'] = req.headers['anthropic-beta'] as string
     }
+    if (req.headers['x-session-id']) {
+      headers['x-session-id'] = req.headers['x-session-id'] as string
+    }
 
     if (isStream) {
       // 流式响应
@@ -228,6 +235,36 @@ router.post('/messages', async (req: Request, res: Response) => {
     }
   } catch (error) {
     logger.error('Request failed', { error: (error as Error).message })
+    res.status(500).json({
+      type: 'error',
+      error: { type: 'api_error', message: (error as Error).message }
+    })
+  }
+})
+
+/**
+ * Claude Count Tokens API
+ * POST /v1/messages/count_tokens
+ */
+router.post('/messages/count_tokens', async (req: Request, res: Response) => {
+  const { model, messages, system, tools } = req.body
+
+  if (!messages || !Array.isArray(messages)) {
+    res.status(400).json({
+      type: 'error',
+      error: { type: 'invalid_request_error', message: 'messages is required' }
+    })
+    return
+  }
+
+  try {
+    const inputTokens = countAllTokens(model || 'claude-sonnet-4.5', system, messages, tools)
+
+    res.json({
+      input_tokens: inputTokens
+    })
+  } catch (error) {
+    logger.error('Count tokens failed', { error: (error as Error).message })
     res.status(500).json({
       type: 'error',
       error: { type: 'api_error', message: (error as Error).message }

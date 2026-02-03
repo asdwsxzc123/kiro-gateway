@@ -47,6 +47,15 @@ export async function addRequestLog(log: Omit<RequestLog, 'id'>): Promise<string
     if (log.error) {
       entry.error = log.error
     }
+    if (log.cacheCreationTokens !== undefined) {
+      entry.cacheCreationTokens = String(log.cacheCreationTokens)
+    }
+    if (log.cacheReadTokens !== undefined) {
+      entry.cacheReadTokens = String(log.cacheReadTokens)
+    }
+    if (log.cost !== undefined) {
+      entry.cost = String(log.cost)
+    }
 
     // 将对象展开为键值对数组
     const args: string[] = []
@@ -99,6 +108,9 @@ export async function getRequestLogs(
         inputTokens: parseInt(data.inputTokens, 10),
         outputTokens: parseInt(data.outputTokens, 10),
         credits: data.credits ? parseFloat(data.credits) : undefined,
+        cacheCreationTokens: data.cacheCreationTokens ? parseInt(data.cacheCreationTokens, 10) : undefined,
+        cacheReadTokens: data.cacheReadTokens ? parseInt(data.cacheReadTokens, 10) : undefined,
+        cost: data.cost ? parseFloat(data.cost) : undefined,
         responseTime: parseInt(data.responseTime, 10),
         success: data.success === 'true',
         error: data.error
