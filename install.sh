@@ -182,7 +182,7 @@ generate_compose_file() {
 services:
   gateway:
     image: ${IMAGE_NAME}:${IMAGE_TAG}
-    container_name: kiro-gateway
+    container_name: api-gateway
     restart: unless-stopped
     ports:
       - "\${PORT:-8000}:8000"
