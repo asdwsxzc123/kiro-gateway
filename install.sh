@@ -169,6 +169,7 @@ create_install_dir() {
     log_step "Creating install directory: $INSTALL_DIR"
     mkdir -p "$INSTALL_DIR"
     mkdir -p "$INSTALL_DIR/data"
+    mkdir -p "$INSTALL_DIR/data/backend"
     cd "$INSTALL_DIR"
 }
 
@@ -228,6 +229,7 @@ services:
       JWT_SECRET: \${JWT_SECRET:-your-jwt-secret-change-in-production}
     volumes:
       - ./data:/app/data
+      - ./data/backend:/app/packages/backend/data
     depends_on:
       redis:
         condition: service_healthy

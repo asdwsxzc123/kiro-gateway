@@ -86,7 +86,7 @@ COPY --from=backend-builder /app/packages/backend/dist ./packages/backend/dist
 COPY --from=frontend-builder /app/packages/frontend/dist ./packages/backend/public
 
 # 创建 data 目录并复制 price.json
-RUN mkdir -p /app/data
+RUN mkdir -p /app/data /app/packages/backend/data
 COPY data/price.json /app/data/price.json
 
 # 创建非 root 用户
@@ -94,7 +94,7 @@ RUN addgroup -g 1001 -S nodejs && \
     adduser -S nodejs -u 1001
 
 # 设置目录权限
-RUN chown -R nodejs:nodejs /app/data
+RUN chown -R nodejs:nodejs /app/data /app/packages/backend/data
 
 # 切换到非 root 用户
 USER nodejs
