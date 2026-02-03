@@ -1,14 +1,14 @@
 #!/bin/bash
 
 # Kiro Gateway Installation Script
-# Usage: curl -fsSL https://raw.githubusercontent.com/asdwsxzc123/kiro-gateway/master/install.sh | bash
+# Usage: curl -fsSL https://raw.githubusercontent.com/asdwsxzc123/api-gateway/master/install.sh | bash
 
 set -e
 
 # Configuration
-IMAGE_NAME="asdwsxzc123/kiro-gateway"
+IMAGE_NAME="asdwsxzc123/api-gateway"
 IMAGE_TAG="${IMAGE_TAG:-latest}"
-INSTALL_DIR="${INSTALL_DIR:-$HOME/kiro-gateway}"
+INSTALL_DIR="${INSTALL_DIR:-$HOME/api-gateway}"
 
 # Colors
 RED='\033[0;31m'
