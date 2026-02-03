@@ -170,6 +170,9 @@ create_install_dir() {
     mkdir -p "$INSTALL_DIR"
     mkdir -p "$INSTALL_DIR/data"
     mkdir -p "$INSTALL_DIR/data/backend"
+    # Set permissions for container user (nodejs uid 1001)
+    chmod 777 "$INSTALL_DIR/data"
+    chmod 777 "$INSTALL_DIR/data/backend"
     cd "$INSTALL_DIR"
 }
 
@@ -212,6 +215,7 @@ services:
     image: ${IMAGE_NAME}:${IMAGE_TAG}
     container_name: api-gateway
     restart: unless-stopped
+    user: "1001:1001"
     ports:
       - "\${PORT:-8000}:8000"
     environment:
