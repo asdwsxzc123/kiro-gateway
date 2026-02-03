@@ -175,13 +175,13 @@ export async function calculateCacheRatio(
   const blocks = extractCacheableBlocks(request)
   const totalWeight = estimateRequestWeight(request)
 
-  logger.info('Cache ratio calculation', {
-    model: request.model,
-    blocksFound: blocks.length,
-    totalWeight,
-    hasSystemArray: Array.isArray(request.system),
-    systemBlockCount: Array.isArray(request.system) ? request.system.length : 0
-  })
+  // logger.info('Cache ratio calculation', {
+  //   model: request.model,
+  //   blocksFound: blocks.length,
+  //   totalWeight,
+  //   hasSystemArray: Array.isArray(request.system),
+  //   systemBlockCount: Array.isArray(request.system) ? request.system.length : 0
+  // })
 
   if (blocks.length === 0) {
     return {

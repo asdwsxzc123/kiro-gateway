@@ -387,3 +387,67 @@ export interface AccountUsage {
   error?: string;
   updatedAt?: number;
 }
+
+/**
+ * 日统计相关类型
+ */
+export interface DailyGlobalStats {
+  date: string;
+  totalRequests: number;
+  successRequests: number;
+  failedRequests: number;
+  totalTokens: number;
+  inputTokens: number;
+  outputTokens: number;
+  totalCost: number;
+  cacheCreationTokens: number;
+  cacheReadTokens: number;
+}
+
+export interface DailyAccountStats {
+  date: string;
+  accountId: string;
+  requests: number;
+  successRequests: number;
+  failedRequests: number;
+  tokens: number;
+  inputTokens: number;
+  outputTokens: number;
+  cost: number;
+  avgResponseTime: number;
+}
+
+export interface DailyApiKeyStats {
+  date: string;
+  apiKeyId: string;
+  requests: number;
+  successRequests: number;
+  failedRequests: number;
+  tokens: number;
+  inputTokens: number;
+  outputTokens: number;
+  cost: number;
+}
+
+export interface DailyModelStats {
+  date: string;
+  model: string;
+  requests: number;
+  successRequests: number;
+  failedRequests: number;
+  tokens: number;
+  inputTokens: number;
+  outputTokens: number;
+  cost: number;
+}
+
+export interface CostRanking {
+  rank: number;
+  id: string;
+  name: string;
+  type: 'account' | 'apiKey' | 'model';
+  totalCost: number;
+  requestCount: number;
+  tokenCount: number;
+  percentage: number;
+}

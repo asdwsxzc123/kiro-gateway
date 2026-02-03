@@ -37,6 +37,8 @@ import { refreshTokenByMethod, needsTokenRefresh } from './tokenRefresh.js'
 import { hasWebSearchTool, handleWebSearchStream } from './websearch.js'
 import * as logStore from '../storage/logStore.js'
 import * as statsStore from '../storage/statsStore.js'
+import * as dailyStatsStore from '../storage/dailyStatsStore.js'
+import * as apiKeyStore from '../storage/apiKeyStore.js'
 import { calculateCost } from './pricing.js'
 import { calculateCacheRatio, splitTokensByRatio } from './cacheTracker.js'
 import type { CacheRatio, CacheCalculation } from './cacheTracker.js'
@@ -173,6 +175,7 @@ export class ProxyServer {
     credits: number,
     inputTokens: number,
     outputTokens: number,
+    cost: number,
     model: string,
     path: string
   ): void {
@@ -186,26 +189,29 @@ export class ProxyServer {
     apiKey.usage.totalCredits += credits
     apiKey.usage.totalInputTokens += inputTokens
     apiKey.usage.totalOutputTokens += outputTokens
+    apiKey.usage.totalCost += cost
     apiKey.lastUsedAt = Date.now()
 
     // 更新日统计
     if (!apiKey.usage.daily[today]) {
-      apiKey.usage.daily[today] = { requests: 0, credits: 0, inputTokens: 0, outputTokens: 0 }
+      apiKey.usage.daily[today] = { requests: 0, credits: 0, inputTokens: 0, outputTokens: 0, cost: 0 }
     }
     apiKey.usage.daily[today].requests++
     apiKey.usage.daily[today].credits += credits
     apiKey.usage.daily[today].inputTokens += inputTokens
     apiKey.usage.daily[today].outputTokens += outputTokens
+    apiKey.usage.daily[today].cost += cost
 
     // 更新模型统计
     if (!apiKey.usage.byModel) apiKey.usage.byModel = {}
     if (!apiKey.usage.byModel[model]) {
-      apiKey.usage.byModel[model] = { requests: 0, credits: 0, inputTokens: 0, outputTokens: 0 }
+      apiKey.usage.byModel[model] = { requests: 0, credits: 0, inputTokens: 0, outputTokens: 0, cost: 0 }
     }
     apiKey.usage.byModel[model].requests++
     apiKey.usage.byModel[model].credits += credits
     apiKey.usage.byModel[model].inputTokens += inputTokens
     apiKey.usage.byModel[model].outputTokens += outputTokens
+    apiKey.usage.byModel[model].cost += cost
 
     // 添加到用量历史
     if (!apiKey.usageHistory) apiKey.usageHistory = []
@@ -215,12 +221,34 @@ export class ProxyServer {
       inputTokens,
       outputTokens,
       credits,
+      cost,
       path
     })
     // 保留最近 100 条
     if (apiKey.usageHistory.length > 100) {
       apiKey.usageHistory = apiKey.usageHistory.slice(0, 100)
     }
+
+    // 持久化到 Redis
+    apiKeyStore.updateDailyApiKeyStats(
+      apiKeyId,
+      credits,
+      inputTokens,
+      outputTokens,
+      cost
+    ).catch(err => {
+      logger.error('Failed to persist API key daily stats', { error: (err as Error).message })
+    })
+
+    apiKeyStore.updateApiKeyTotalStats(
+      apiKeyId,
+      credits,
+      inputTokens,
+      outputTokens,
+      cost
+    ).catch(err => {
+      logger.error('Failed to persist API key total stats', { error: (err as Error).message })
+    })
   }
 
   // ============ Token 刷新 ============
@@ -597,6 +625,49 @@ export class ProxyServer {
         logger.error('Failed to persist global stats', { error: (err as Error).message })
       })
 
+      // Update daily stats
+      const today = new Date().toISOString().split('T')[0]
+
+      // 更新全局日统计
+      await dailyStatsStore.updateDailyGlobalStats(
+        today,
+        true,
+        result.usage.inputTokens,
+        result.usage.outputTokens,
+        0,
+        cost2.totalCost,
+        cacheCalc.cacheCreationTokens,
+        cacheCalc.cacheReadTokens
+      ).catch(err => {
+        logger.error('Failed to persist daily global stats', { error: (err as Error).message })
+      })
+
+      // 更新账号日统计
+      await dailyStatsStore.updateDailyAccountStats(
+        usedAccount.id,
+        today,
+        true,
+        result.usage.inputTokens,
+        result.usage.outputTokens,
+        Date.now() - startTime,
+        cost2.totalCost,
+        cacheCalc.cacheCreationTokens,
+        cacheCalc.cacheReadTokens
+      ).catch(err => {
+        logger.error('Failed to persist daily account stats', { error: (err as Error).message })
+      })
+
+      // 更新模型日统计
+      await dailyStatsStore.updateDailyModelStats(
+        request.model,
+        today,
+        result.usage.inputTokens,
+        result.usage.outputTokens,
+        cost2.totalCost
+      ).catch(err => {
+        logger.error('Failed to persist daily model stats', { error: (err as Error).message })
+      })
+
       this.recordRequest({
         path: '/v1/messages',
         model: request.model,
@@ -864,7 +935,7 @@ export class ProxyServer {
             })
 
             if (matchedApiKey) {
-              this.recordApiKeyUsage(matchedApiKey.id, usage.credits || 0, usage.inputTokens, usage.outputTokens, request.model, '/v1/chat/completions')
+              this.recordApiKeyUsage(matchedApiKey.id, usage.credits || 0, usage.inputTokens, usage.outputTokens, costStream1.totalCost, request.model, '/v1/chat/completions')
             }
 
             resolve()
@@ -1321,8 +1392,51 @@ export class ProxyServer {
             logger.error('Failed to persist global stats', { error: (err as Error).message })
           })
 
+          // Update daily stats
+          const today = new Date().toISOString().split('T')[0]
+
+          // 更新全局日统计
+          await dailyStatsStore.updateDailyGlobalStats(
+            today,
+            true,
+            usage.inputTokens,
+            usage.outputTokens,
+            usage.credits || 0,
+            costStream2.totalCost,
+            cacheCalc?.cacheCreationTokens ?? 0,
+            cacheCalc?.cacheReadTokens ?? 0
+          ).catch(err => {
+            logger.error('Failed to persist daily global stats', { error: (err as Error).message })
+          })
+
+          // 更新账号日统计
+          await dailyStatsStore.updateDailyAccountStats(
+            account.id,
+            today,
+            true,
+            usage.inputTokens,
+            usage.outputTokens,
+            Date.now() - startTime,
+            costStream2.totalCost,
+            cacheCalc?.cacheCreationTokens ?? 0,
+            cacheCalc?.cacheReadTokens ?? 0
+          ).catch(err => {
+            logger.error('Failed to persist daily account stats', { error: (err as Error).message })
+          })
+
+          // 更新模型日统计
+          await dailyStatsStore.updateDailyModelStats(
+            model,
+            today,
+            usage.inputTokens,
+            usage.outputTokens,
+            costStream2.totalCost
+          ).catch(err => {
+            logger.error('Failed to persist daily model stats', { error: (err as Error).message })
+          })
+
           if (matchedApiKey) {
-            this.recordApiKeyUsage(matchedApiKey.id, usage.credits || 0, usage.inputTokens, usage.outputTokens, model, '/v1/messages')
+            this.recordApiKeyUsage(matchedApiKey.id, usage.credits || 0, usage.inputTokens, usage.outputTokens, costStream2.totalCost, model, '/v1/messages')
           }
 
           // 检查是否需要自动继续

@@ -369,17 +369,20 @@ export interface ApiKey {
     totalCredits: number
     totalInputTokens: number
     totalOutputTokens: number
+    totalCost: number
     daily: Record<string, {
       requests: number
       credits: number
       inputTokens: number
       outputTokens: number
+      cost: number
     }>
     byModel?: Record<string, {
       requests: number
       credits: number
       inputTokens: number
       outputTokens: number
+      cost: number
     }>
   }
 
@@ -390,6 +393,7 @@ export interface ApiKey {
     inputTokens: number
     outputTokens: number
     credits: number
+    cost: number
     path: string
   }>
 }

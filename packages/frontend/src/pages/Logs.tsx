@@ -26,7 +26,7 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { getRequestLogs } from "@/api/logs"
-import type { LogsQuery, RequestLog } from "@kiro-gateway/shared"
+import type { LogsQuery } from "@kiro-gateway/shared"
 
 /**
  * Logs 页面 - 请求日志与 Token 使用明细

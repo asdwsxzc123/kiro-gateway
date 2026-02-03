@@ -4,6 +4,8 @@ import {
   CheckCircle,
   Users,
   Clock,
+  DollarSign,
+  TrendingUp,
 } from "lucide-react"
 import {
   Card,
@@ -21,9 +23,31 @@ import {
   Tooltip,
   ResponsiveContainer,
 } from "recharts"
-import { getStats } from "@/api/stats"
+import { getStats, getTodayGlobalCost, getGlobalDailyCosts, getTopAccountsByCost, getTopApiKeysByCost } from "@/api/stats"
 import { getAccounts } from "@/api/accounts"
 import { getLogsSummary } from "@/api/logs"
+
+/**
+ * 格式化费用显示
+ */
+const formatCost = (cost: number): string => {
+  return `$${cost.toFixed(4)}`
+}
+
+/**
+ * 获取最近7天的日期范围
+ */
+const getLast7DaysDateRange = () => {
+  const endDate = new Date()
+  const startDate = new Date(endDate.getTime() - 7 * 24 * 60 * 60 * 1000)
+
+  const formatDate = (date: Date) => date.toISOString().split('T')[0]
+
+  return {
+    startDate: formatDate(startDate),
+    endDate: formatDate(endDate),
+  }
+}
 
 /**
  * Dashboard 页面 - 仪表盘
@@ -46,6 +70,35 @@ export function Dashboard() {
   const { data: accounts, isLoading: accountsLoading } = useQuery({
     queryKey: ["accounts"],
     queryFn: getAccounts,
+  })
+
+  // 获取今日全局费用
+  const { data: todayGlobalCost = 0 } = useQuery({
+    queryKey: ["todayGlobalCost"],
+    queryFn: getTodayGlobalCost,
+    refetchInterval: 30 * 1000, // 30秒自动刷新
+  })
+
+  // 获取最近7天的费用趋势
+  const dateRange = getLast7DaysDateRange()
+  const { data: costTrendData = [] } = useQuery({
+    queryKey: ["costTrend", dateRange.startDate, dateRange.endDate],
+    queryFn: () => getGlobalDailyCosts(dateRange.startDate, dateRange.endDate),
+    refetchInterval: 30 * 1000, // 30秒自动刷新
+  })
+
+  // 获取Top 5账号费用排行
+  const { data: topAccounts = [] } = useQuery({
+    queryKey: ["topAccountsByCost"],
+    queryFn: () => getTopAccountsByCost(5, 7),
+    refetchInterval: 30 * 1000, // 30秒自动刷新
+  })
+
+  // 获取Top 5 API Key费用排行
+  const { data: topApiKeys = [] } = useQuery({
+    queryKey: ["topApiKeysByCost"],
+    queryFn: () => getTopApiKeysByCost(5, 7),
+    refetchInterval: 30 * 1000, // 30秒自动刷新
   })
 
   // 计算成功率
@@ -81,6 +134,12 @@ export function Dashboard() {
       icon: Clock,
       description: "最近 24 小时请求次数",
     },
+    {
+      title: "今日费用",
+      value: formatCost(todayGlobalCost),
+      icon: DollarSign,
+      description: "今日全局费用总额",
+    },
   ]
 
   // 模拟趋势数据（实际应从后端获取）
@@ -105,7 +164,7 @@ export function Dashboard() {
       </div>
 
       {/* 统计卡片 */}
-      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
+      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-5">
         {statCards.map((card) => (
           <Card key={card.title}>
             <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
@@ -126,37 +185,149 @@ export function Dashboard() {
         ))}
       </div>
 
-      {/* 请求趋势图 */}
-      <Card>
-        <CardHeader>
-          <CardTitle>请求趋势</CardTitle>
-          <CardDescription>最近 7 天的请求统计</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <div className="h-[300px]">
-            {statsLoading ? (
-              <div className="flex h-full items-center justify-center">
-                加载中...
+      {/* 请求趋势图和费用趋势图 */}
+      <div className="grid gap-4 md:grid-cols-2">
+        {/* 请求趋势图 */}
+        <Card>
+          <CardHeader>
+            <CardTitle>请求趋势</CardTitle>
+            <CardDescription>最近 7 天的请求统计</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="h-[300px]">
+              {statsLoading ? (
+                <div className="flex h-full items-center justify-center">
+                  加载中...
+                </div>
+              ) : (
+                <ResponsiveContainer width="100%" height="100%">
+                  <LineChart data={trendData}>
+                    <CartesianGrid strokeDasharray="3 3" />
+                    <XAxis dataKey="date" />
+                    <YAxis />
+                    <Tooltip />
+                    <Line
+                      type="monotone"
+                      dataKey="requests"
+                      stroke="#8884d8"
+                      name="请求数"
+                    />
+                  </LineChart>
+                </ResponsiveContainer>
+              )}
+            </div>
+          </CardContent>
+        </Card>
+
+        {/* 费用趋势图 */}
+        <Card>
+          <CardHeader>
+            <CardTitle>费用趋势</CardTitle>
+            <CardDescription>最近 7 天的费用统计</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="h-[300px]">
+              {costTrendData.length === 0 ? (
+                <div className="flex h-full items-center justify-center">
+                  加载中...
+                </div>
+              ) : (
+                <ResponsiveContainer width="100%" height="100%">
+                  <LineChart data={costTrendData}>
+                    <CartesianGrid strokeDasharray="3 3" />
+                    <XAxis dataKey="date" />
+                    <YAxis />
+                    <Tooltip formatter={(value) => formatCost(value as number)} />
+                    <Line
+                      type="monotone"
+                      dataKey="cost"
+                      stroke="#ef4444"
+                      name="费用"
+                    />
+                  </LineChart>
+                </ResponsiveContainer>
+              )}
+            </div>
+          </CardContent>
+        </Card>
+      </div>
+
+      {/* 费用排行榜 */}
+      <div className="grid gap-4 md:grid-cols-2">
+        {/* 账号费用排行 */}
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <TrendingUp className="h-4 w-4" />
+              账号费用排行 (7天)
+            </CardTitle>
+            <CardDescription>Top 5 账号费用排行榜</CardDescription>
+          </CardHeader>
+          <CardContent>
+            {topAccounts.length === 0 ? (
+              <div className="py-8 text-center text-muted-foreground">
+                暂无数据
               </div>
             ) : (
-              <ResponsiveContainer width="100%" height="100%">
-                <LineChart data={trendData}>
-                  <CartesianGrid strokeDasharray="3 3" />
-                  <XAxis dataKey="date" />
-                  <YAxis />
-                  <Tooltip />
-                  <Line
-                    type="monotone"
-                    dataKey="requests"
-                    stroke="#8884d8"
-                    name="请求数"
-                  />
-                </LineChart>
-              </ResponsiveContainer>
+              <div className="space-y-4">
+                {topAccounts.map((item, index) => (
+                  <div key={item.id} className="flex items-center justify-between">
+                    <div className="flex items-center gap-3">
+                      <div className="flex h-8 w-8 items-center justify-center rounded-full bg-muted text-sm font-semibold">
+                        {index + 1}
+                      </div>
+                      <div className="flex-1">
+                        <p className="text-sm font-medium">{item.name}</p>
+                        <p className="text-xs text-muted-foreground">{item.id.slice(0, 8)}...</p>
+                      </div>
+                    </div>
+                    <p className="text-sm font-semibold text-red-600">
+                      {formatCost(item.cost)}
+                    </p>
+                  </div>
+                ))}
+              </div>
             )}
-          </div>
-        </CardContent>
-      </Card>
+          </CardContent>
+        </Card>
+
+        {/* API Key 费用排行 */}
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <TrendingUp className="h-4 w-4" />
+              API Key 费用排行 (7天)
+            </CardTitle>
+            <CardDescription>Top 5 API Key 费用排行榜</CardDescription>
+          </CardHeader>
+          <CardContent>
+            {topApiKeys.length === 0 ? (
+              <div className="py-8 text-center text-muted-foreground">
+                暂无数据
+              </div>
+            ) : (
+              <div className="space-y-4">
+                {topApiKeys.map((item, index) => (
+                  <div key={item.id} className="flex items-center justify-between">
+                    <div className="flex items-center gap-3">
+                      <div className="flex h-8 w-8 items-center justify-center rounded-full bg-muted text-sm font-semibold">
+                        {index + 1}
+                      </div>
+                      <div className="flex-1">
+                        <p className="text-sm font-medium">{item.name}</p>
+                        <p className="text-xs text-muted-foreground">{item.id.slice(0, 8)}...</p>
+                      </div>
+                    </div>
+                    <p className="text-sm font-semibold text-red-600">
+                      {formatCost(item.cost)}
+                    </p>
+                  </div>
+                ))}
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      </div>
 
       {/* 账号状态列表 */}
       <Card>

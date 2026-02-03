@@ -1,6 +1,6 @@
 import { useState } from "react"
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
-import { Plus, Trash2, RefreshCw, TestTube, Pencil, BarChart3, Fingerprint } from "lucide-react"
+import { Plus, Trash2, RefreshCw, TestTube, Pencil, BarChart3, Fingerprint, ArrowUpDown } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -47,7 +47,9 @@ import {
   getAllAccountsUsage,
   regenerateMachineId,
 } from "@/api/accounts"
+import { getAllAccountsTodayCost } from "@/api/stats"
 import type { AddAccountRequest, Account, AccountUsage } from "@kiro-gateway/shared"
+import type { AccountCostData } from "@/api/stats"
 
 // 导入模式类型
 type ImportMode = "oidc" | "sso" | "manual"
@@ -154,6 +156,9 @@ export function Accounts() {
   const [ssoForm, setSsoForm] = useState<SsoFormData>(initialSsoForm)
   // 手动输入表单数据
   const [manualForm, setManualForm] = useState<AddAccountRequest>(initialManualForm)
+  // 排序状态
+  const [sortBy, setSortBy] = useState<"email" | "todayCost" | "totalCost">("email")
+  const [sortOrder, setSortOrder] = useState<"asc" | "desc">("asc")
 
   const { toast } = useToast()
   const queryClient = useQueryClient()
@@ -174,9 +179,62 @@ export function Accounts() {
     enabled: !!accounts && accounts.length > 0,
   })
 
+  // 获取账号费用数据
+  const { data: accountsCostData = [] } = useQuery({
+    queryKey: ["accountsCostData"],
+    queryFn: getAllAccountsTodayCost,
+    refetchInterval: 30 * 1000, // 30秒自动刷新
+  })
+
   // 根据账号 ID 获取使用量数据
   const getUsageForAccount = (accountId: string): AccountUsage | undefined => {
     return usageData?.find(u => u.accountId === accountId)
+  }
+
+  // 格式化费用显示
+  const formatCost = (cost: number): string => {
+    return `$${cost.toFixed(4)}`
+  }
+
+  // 获取账号的费用数据
+  const getAccountCostData = (accountId: string): AccountCostData | undefined => {
+    return accountsCostData.find(item => item.accountId === accountId)
+  }
+
+  // 合并账号和费用数据，并排序
+  const mergedAccounts = (accounts || []).map(account => ({
+    ...account,
+    costData: getAccountCostData(account.id),
+  })).sort((a, b) => {
+    let compareValue = 0
+
+    if (sortBy === "email") {
+      compareValue = (a.email || "").localeCompare(b.email || "")
+    } else if (sortBy === "todayCost") {
+      compareValue = (a.costData?.todayCost || 0) - (b.costData?.todayCost || 0)
+    } else if (sortBy === "totalCost") {
+      compareValue = (a.costData?.totalCost || 0) - (b.costData?.totalCost || 0)
+    }
+
+    return sortOrder === "asc" ? compareValue : -compareValue
+  })
+
+  // 切换排序
+  const toggleSort = (field: "email" | "todayCost" | "totalCost") => {
+    if (sortBy === field) {
+      setSortOrder(sortOrder === "asc" ? "desc" : "asc")
+    } else {
+      setSortBy(field)
+      setSortOrder("asc")
+    }
+  }
+
+  // 排序指示器
+  const SortIndicator = ({ field }: { field: "email" | "todayCost" | "totalCost" }) => {
+    if (sortBy !== field) return null
+    return (
+      <ArrowUpDown className={`h-4 w-4 inline ml-1 ${sortOrder === "desc" ? "rotate-180" : ""}`} />
+    )
   }
 
   // 格式化使用量显示
@@ -1127,17 +1185,34 @@ export function Accounts() {
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>邮箱/ID</TableHead>
+                  <TableHead
+                    className="cursor-pointer hover:bg-muted"
+                    onClick={() => toggleSort("email")}
+                  >
+                    邮箱/ID <SortIndicator field="email" />
+                  </TableHead>
                   <TableHead>机器码</TableHead>
                   <TableHead>订阅类型</TableHead>
                   <TableHead>状态</TableHead>
                   <TableHead>使用量</TableHead>
                   <TableHead>重置时间</TableHead>
+                  <TableHead
+                    className="cursor-pointer hover:bg-muted"
+                    onClick={() => toggleSort("todayCost")}
+                  >
+                    今日费用 <SortIndicator field="todayCost" />
+                  </TableHead>
+                  <TableHead
+                    className="cursor-pointer hover:bg-muted"
+                    onClick={() => toggleSort("totalCost")}
+                  >
+                    累计费用 <SortIndicator field="totalCost" />
+                  </TableHead>
                   <TableHead className="text-right">操作</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {accounts?.map((account) => (
+                {mergedAccounts?.map((account) => (
                   <TableRow key={account.id}>
                     <TableCell className="font-medium">
                       {account.email || account.id.slice(0, 12) + "..."}
@@ -1166,6 +1241,12 @@ export function Accounts() {
                     </TableCell>
                     <TableCell>
                       <span className="text-sm">{getNextResetDate(account.id)}</span>
+                    </TableCell>
+                    <TableCell className="font-semibold text-red-600">
+                      {account.costData ? formatCost(account.costData.todayCost) : "-"}
+                    </TableCell>
+                    <TableCell className="font-semibold text-orange-600">
+                      {account.costData ? formatCost(account.costData.totalCost) : "-"}
                     </TableCell>
                     <TableCell className="text-right">
                       <div className="flex justify-end gap-2">
