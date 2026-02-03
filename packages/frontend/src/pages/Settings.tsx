@@ -228,9 +228,25 @@ export function Settings() {
   }
 
   // 复制 API Key
-  const copyApiKey = (key: string) => {
-    navigator.clipboard.writeText(key)
-    toast({ title: "已复制", description: "API Key 已复制到剪贴板" })
+  const copyApiKey = async (key: string) => {
+    try {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        await navigator.clipboard.writeText(key)
+      } else {
+        // Fallback for non-HTTPS or unsupported browsers
+        const textArea = document.createElement('textarea')
+        textArea.value = key
+        textArea.style.position = 'fixed'
+        textArea.style.left = '-9999px'
+        document.body.appendChild(textArea)
+        textArea.select()
+        document.execCommand('copy')
+        document.body.removeChild(textArea)
+      }
+      toast({ title: "已复制", description: "API Key 已复制到剪贴板" })
+    } catch {
+      toast({ title: "复制失败", description: "请手动复制", variant: "destructive" })
+    }
   }
 
   // 保存代理服务配置
