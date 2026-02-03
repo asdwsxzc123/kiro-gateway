@@ -168,12 +168,39 @@ check_docker_compose() {
 create_install_dir() {
     log_step "Creating install directory: $INSTALL_DIR"
     mkdir -p "$INSTALL_DIR"
+    mkdir -p "$INSTALL_DIR/data"
     cd "$INSTALL_DIR"
+}
+
+# Download price.json
+download_price_json() {
+    log_step "Downloading price.json..."
+
+    local PRICE_URL="https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json"
+    local PRICE_FILE="$INSTALL_DIR/data/price.json"
+
+    if [ -f "$PRICE_FILE" ]; then
+        log_info "price.json already exists, skipping download"
+        return
+    fi
+
+    if curl -fsSL "$PRICE_URL" -o "$PRICE_FILE"; then
+        log_info "price.json downloaded successfully"
+    else
+        log_warn "Failed to download price.json, pricing features may not work"
+    fi
 }
 
 # Generate docker-compose.yml
 generate_compose_file() {
-    log_step "Generating docker-compose.yml..."
+    log_step "Checking docker-compose.yml..."
+
+    if [ -f docker-compose.yml ]; then
+        log_info "docker-compose.yml already exists, skipping"
+        return
+    fi
+
+    log_info "Generating docker-compose.yml..."
 
     cat > docker-compose.yml << EOF
 # Kiro Gateway Docker Compose Configuration
@@ -199,6 +226,8 @@ services:
       RATE_LIMIT_MAX_REQUESTS: \${RATE_LIMIT_MAX_REQUESTS:-100}
       LOG_LEVEL: \${LOG_LEVEL:-info}
       JWT_SECRET: \${JWT_SECRET:-your-jwt-secret-change-in-production}
+    volumes:
+      - ./data:/app/data
     depends_on:
       redis:
         condition: service_healthy
@@ -218,7 +247,7 @@ services:
     ports:
       - "\${REDIS_PORT:-16379}:6379"
     volumes:
-      - redis-data:/data
+      - ./data/redis:/data
     command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
     networks:
       - kiro-network
@@ -232,10 +261,6 @@ services:
 networks:
   kiro-network:
     driver: bridge
-
-volumes:
-  redis-data:
-    driver: local
 EOF
 
     log_info "docker-compose.yml generated"
@@ -432,6 +457,7 @@ main() {
 
     # Fresh install
     create_install_dir
+    download_price_json
     generate_compose_file
     generate_env_file
     generate_manage_script
