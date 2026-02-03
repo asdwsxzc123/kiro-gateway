@@ -1,36 +1,11 @@
 /**
  * 模型费用计算模块
- * 基于 LiteLLM 价格表计算请求费用
+ * Claude 模型价格表（内置）
  */
 
-import { readFileSync, writeFileSync, existsSync } from 'fs'
-import { join } from 'path'
 import { createLogger } from '../utils/logger.js'
 
 const logger = createLogger('Pricing')
-
-// 价格表路径 - 优先使用 data 目录（Docker 挂载），回退到项目根目录
-function getPriceJsonPath(): string {
-  // Docker 环境: /app/data/price.json
-  const dockerPath = '/app/data/price.json'
-  if (existsSync(dockerPath)) {
-    return dockerPath
-  }
-
-  // 本地开发环境: 项目根目录/data/price.json
-  const localPath = join(process.cwd(), 'data/price.json')
-  if (existsSync(localPath)) {
-    return localPath
-  }
-
-  // 回退到相对于 __dirname 的路径
-  return join(__dirname, '../../data/price.json')
-}
-
-const PRICE_JSON_PATH = getPriceJsonPath()
-
-// LiteLLM 远程价格表 URL
-const LITELLM_PRICE_URL = 'https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json'
 
 // 模型价格信息接口
 export interface ModelPriceInfo {
@@ -41,7 +16,6 @@ export interface ModelPriceInfo {
   max_input_tokens?: number
   max_output_tokens?: number
   supports_prompt_caching?: boolean
-  [key: string]: unknown
 }
 
 // 费用计算结果
@@ -53,47 +27,212 @@ export interface CostCalculation {
   totalCost: number
 }
 
-// 价格表缓存
-let priceData: Record<string, ModelPriceInfo> | null = null
+/**
+ * 内置 Claude 模型价格表
+ * 价格单位: USD per token
+ * 数据来源: https://www.anthropic.com/pricing
+ */
+const CLAUDE_PRICES: Record<string, ModelPriceInfo> = {
+  // Claude 4 Opus
+  'claude-4-opus-20250514': {
+    input_cost_per_token: 0.000015,
+    output_cost_per_token: 0.000075,
+    cache_creation_input_token_cost: 0.00001875,
+    cache_read_input_token_cost: 0.0000015,
+    max_input_tokens: 200000,
+    max_output_tokens: 32000,
+    supports_prompt_caching: true
+  },
+  'claude-opus-4': {
+    input_cost_per_token: 0.000015,
+    output_cost_per_token: 0.000075,
+    cache_creation_input_token_cost: 0.00001875,
+    cache_read_input_token_cost: 0.0000015,
+    max_input_tokens: 200000,
+    max_output_tokens: 32000,
+    supports_prompt_caching: true
+  },
+
+  // Claude Opus 4.5
+  'claude-opus-4-5-20250929': {
+    input_cost_per_token: 0.000015,
+    output_cost_per_token: 0.000075,
+    cache_creation_input_token_cost: 0.00001875,
+    cache_read_input_token_cost: 0.0000015,
+    max_input_tokens: 200000,
+    max_output_tokens: 32000,
+    supports_prompt_caching: true
+  },
+  'claude-opus-4-5': {
+    input_cost_per_token: 0.000015,
+    output_cost_per_token: 0.000075,
+    cache_creation_input_token_cost: 0.00001875,
+    cache_read_input_token_cost: 0.0000015,
+    max_input_tokens: 200000,
+    max_output_tokens: 32000,
+    supports_prompt_caching: true
+  },
+  'claude-opus-4.5': {
+    input_cost_per_token: 0.000015,
+    output_cost_per_token: 0.000075,
+    cache_creation_input_token_cost: 0.00001875,
+    cache_read_input_token_cost: 0.0000015,
+    max_input_tokens: 200000,
+    max_output_tokens: 32000,
+    supports_prompt_caching: true
+  },
+
+  // Claude 4 Sonnet
+  'claude-4-sonnet-20250514': {
+    input_cost_per_token: 0.000003,
+    output_cost_per_token: 0.000015,
+    cache_creation_input_token_cost: 0.00000375,
+    cache_read_input_token_cost: 0.0000003,
+    max_input_tokens: 200000,
+    max_output_tokens: 64000,
+    supports_prompt_caching: true
+  },
+  'claude-sonnet-4': {
+    input_cost_per_token: 0.000003,
+    output_cost_per_token: 0.000015,
+    cache_creation_input_token_cost: 0.00000375,
+    cache_read_input_token_cost: 0.0000003,
+    max_input_tokens: 200000,
+    max_output_tokens: 64000,
+    supports_prompt_caching: true
+  },
+
+  // Claude Sonnet 4.5
+  'claude-sonnet-4-5-20250929': {
+    input_cost_per_token: 0.000003,
+    output_cost_per_token: 0.000015,
+    cache_creation_input_token_cost: 0.00000375,
+    cache_read_input_token_cost: 0.0000003,
+    max_input_tokens: 200000,
+    max_output_tokens: 64000,
+    supports_prompt_caching: true
+  },
+  'claude-sonnet-4-5': {
+    input_cost_per_token: 0.000003,
+    output_cost_per_token: 0.000015,
+    cache_creation_input_token_cost: 0.00000375,
+    cache_read_input_token_cost: 0.0000003,
+    max_input_tokens: 200000,
+    max_output_tokens: 64000,
+    supports_prompt_caching: true
+  },
+  'claude-sonnet-4.5': {
+    input_cost_per_token: 0.000003,
+    output_cost_per_token: 0.000015,
+    cache_creation_input_token_cost: 0.00000375,
+    cache_read_input_token_cost: 0.0000003,
+    max_input_tokens: 200000,
+    max_output_tokens: 64000,
+    supports_prompt_caching: true
+  },
+
+  // Claude Haiku 4.5
+  'claude-haiku-4-5-20250929': {
+    input_cost_per_token: 0.0000008,
+    output_cost_per_token: 0.000004,
+    cache_creation_input_token_cost: 0.000001,
+    cache_read_input_token_cost: 0.00000008,
+    max_input_tokens: 200000,
+    max_output_tokens: 8192,
+    supports_prompt_caching: true
+  },
+  'claude-haiku-4-5': {
+    input_cost_per_token: 0.0000008,
+    output_cost_per_token: 0.000004,
+    cache_creation_input_token_cost: 0.000001,
+    cache_read_input_token_cost: 0.00000008,
+    max_input_tokens: 200000,
+    max_output_tokens: 8192,
+    supports_prompt_caching: true
+  },
+  'claude-haiku-4.5': {
+    input_cost_per_token: 0.0000008,
+    output_cost_per_token: 0.000004,
+    cache_creation_input_token_cost: 0.000001,
+    cache_read_input_token_cost: 0.00000008,
+    max_input_tokens: 200000,
+    max_output_tokens: 8192,
+    supports_prompt_caching: true
+  },
+
+  // Claude 3.5 Sonnet (legacy)
+  'claude-3-5-sonnet-20241022': {
+    input_cost_per_token: 0.000003,
+    output_cost_per_token: 0.000015,
+    cache_creation_input_token_cost: 0.00000375,
+    cache_read_input_token_cost: 0.0000003,
+    max_input_tokens: 200000,
+    max_output_tokens: 8192,
+    supports_prompt_caching: true
+  },
+  'claude-3.5-sonnet': {
+    input_cost_per_token: 0.000003,
+    output_cost_per_token: 0.000015,
+    cache_creation_input_token_cost: 0.00000375,
+    cache_read_input_token_cost: 0.0000003,
+    max_input_tokens: 200000,
+    max_output_tokens: 8192,
+    supports_prompt_caching: true
+  },
+
+  // Claude 3.5 Haiku (legacy)
+  'claude-3-5-haiku-20241022': {
+    input_cost_per_token: 0.0000008,
+    output_cost_per_token: 0.000004,
+    cache_creation_input_token_cost: 0.000001,
+    cache_read_input_token_cost: 0.00000008,
+    max_input_tokens: 200000,
+    max_output_tokens: 8192,
+    supports_prompt_caching: true
+  },
+  'claude-3.5-haiku': {
+    input_cost_per_token: 0.0000008,
+    output_cost_per_token: 0.000004,
+    cache_creation_input_token_cost: 0.000001,
+    cache_read_input_token_cost: 0.00000008,
+    max_input_tokens: 200000,
+    max_output_tokens: 8192,
+    supports_prompt_caching: true
+  },
+
+  // Claude 3 Opus (legacy)
+  'claude-3-opus-20240229': {
+    input_cost_per_token: 0.000015,
+    output_cost_per_token: 0.000075,
+    cache_creation_input_token_cost: 0.00001875,
+    cache_read_input_token_cost: 0.0000015,
+    max_input_tokens: 200000,
+    max_output_tokens: 4096,
+    supports_prompt_caching: true
+  },
+  'claude-3-opus': {
+    input_cost_per_token: 0.000015,
+    output_cost_per_token: 0.000075,
+    cache_creation_input_token_cost: 0.00001875,
+    cache_read_input_token_cost: 0.0000015,
+    max_input_tokens: 200000,
+    max_output_tokens: 4096,
+    supports_prompt_caching: true
+  }
+}
 
 /**
  * 加载价格表
  */
 export function loadPriceConfig(): Record<string, ModelPriceInfo> {
-  if (priceData) return priceData
-
-  try {
-    const raw = readFileSync(PRICE_JSON_PATH, 'utf-8')
-    priceData = JSON.parse(raw)
-    logger.info('Price config loaded', { modelCount: Object.keys(priceData!).length })
-    return priceData!
-  } catch (error) {
-    logger.error('Failed to load price config', { error: (error as Error).message })
-    priceData = {}
-    return priceData
-  }
+  return CLAUDE_PRICES
 }
 
 /**
- * 重新加载价格表（清除缓存）
+ * 重新加载价格表（兼容旧接口，实际返回内置价格表）
  */
 export function reloadPriceConfig(): Record<string, ModelPriceInfo> {
-  priceData = null
-  return loadPriceConfig()
-}
-
-/**
- * Gateway 内部模型名到 price.json key 的映射
- * Gateway uses names like "claude-sonnet-4.5", price.json uses "claude-sonnet-4-5-20250929" etc.
- */
-const MODEL_PRICE_MAP: Record<string, string> = {
-  // Gateway internal model names -> price.json keys
-  'claude-sonnet-4.5': 'claude-sonnet-4-5',
-  'claude-sonnet-4': 'claude-4-sonnet-20250514',
-  'claude-haiku-4.5': 'claude-haiku-4-5',
-  'claude-opus-4.5': 'claude-opus-4-5',
-  'claude-opus-4': 'claude-4-opus-20250514',
-  'claude-opus-4-1': 'claude-opus-4-1',
+  return CLAUDE_PRICES
 }
 
 /**
@@ -101,31 +240,26 @@ const MODEL_PRICE_MAP: Record<string, string> = {
  * 支持精确匹配和模糊匹配
  */
 export function findModelPrice(model: string): ModelPriceInfo | null {
-  const prices = loadPriceConfig()
-
   // 1. 精确匹配
-  if (prices[model]) return prices[model]
+  if (CLAUDE_PRICES[model]) return CLAUDE_PRICES[model]
 
-  // 2. 通过映射表匹配
-  const mapped = MODEL_PRICE_MAP[model]
-  if (mapped && prices[mapped]) return prices[mapped]
+  // 2. 标准化名称匹配: claude-sonnet-4.5 -> claude-sonnet-4-5
+  const normalized = model.replace(/\./g, '-')
+  if (CLAUDE_PRICES[normalized]) return CLAUDE_PRICES[normalized]
 
-  // 3. 模糊匹配：尝试在 price.json 中查找包含模型名的 key
+  // 3. 模糊匹配
   const lowerModel = model.toLowerCase()
-  for (const [key, value] of Object.entries(prices)) {
-    // Only match direct anthropic provider entries (not bedrock/openrouter etc.)
+  for (const [key, value] of Object.entries(CLAUDE_PRICES)) {
     if (key.toLowerCase() === lowerModel) return value
-    if (key.startsWith('claude-') && key.toLowerCase().includes(lowerModel.replace('claude-', ''))) {
+    // 匹配包含模型名的 key
+    if (key.toLowerCase().includes(lowerModel.replace('claude-', ''))) {
       return value
     }
   }
 
-  // 4. 尝试标准化名称匹配: claude-sonnet-4.5 -> claude-sonnet-4-5
-  const normalized = model.replace(/\./g, '-')
-  if (prices[normalized]) return prices[normalized]
-
-  for (const [key, value] of Object.entries(prices)) {
-    if (key.startsWith('claude-') && key.startsWith(normalized)) {
+  // 4. 前缀匹配
+  for (const [key, value] of Object.entries(CLAUDE_PRICES)) {
+    if (key.startsWith(normalized)) {
       return value
     }
   }
@@ -186,52 +320,18 @@ export function calculateCost(
  * 获取当前价格表（只返回 Claude 模型）
  */
 export function getClaudePrices(): Record<string, ModelPriceInfo> {
-  const prices = loadPriceConfig()
-  const claudePrices: Record<string, ModelPriceInfo> = {}
-
-  for (const [key, value] of Object.entries(prices)) {
-    // Only include direct Claude model entries (not bedrock/openrouter/azure prefixed)
-    if (key.startsWith('claude-') && !key.includes('/')) {
-      claudePrices[key] = value
-    }
-  }
-
-  return claudePrices
+  return CLAUDE_PRICES
 }
 
 /**
- * 从远程 URL 更新价格表到本地
+ * 从远程 URL 更新价格表（已废弃，保留接口兼容）
+ * @deprecated 价格表已内置，此方法不再执行实际更新
  */
-export async function updatePriceFromRemote(url?: string): Promise<{ success: boolean; modelCount: number; error?: string }> {
-  const fetchUrl = url || LITELLM_PRICE_URL
-
-  try {
-    logger.info('Fetching price config from remote', { url: fetchUrl })
-
-    const response = await fetch(fetchUrl)
-    if (!response.ok) {
-      throw new Error(`HTTP ${response.status}: ${response.statusText}`)
-    }
-
-    const data = await response.json() as Record<string, unknown>
-    const modelCount = Object.keys(data).length
-
-    // Validate the data looks like a price config
-    if (modelCount < 10) {
-      throw new Error('Invalid price data: too few models')
-    }
-
-    // Write to local file
-    writeFileSync(PRICE_JSON_PATH, JSON.stringify(data, null, 4), 'utf-8')
-
-    // Reload cache
-    reloadPriceConfig()
-
-    logger.info('Price config updated from remote', { modelCount })
-    return { success: true, modelCount }
-  } catch (error) {
-    const errorMsg = (error as Error).message
-    logger.error('Failed to update price config from remote', { error: errorMsg })
-    return { success: false, modelCount: 0, error: errorMsg }
+export async function updatePriceFromRemote(_url?: string): Promise<{ success: boolean; modelCount: number; error?: string }> {
+  logger.info('Price config is now built-in, remote update is disabled')
+  return {
+    success: true,
+    modelCount: Object.keys(CLAUDE_PRICES).length,
+    error: 'Price config is built-in, no update needed'
   }
 }
