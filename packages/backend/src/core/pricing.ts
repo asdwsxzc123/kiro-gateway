@@ -3,14 +3,31 @@
  * 基于 LiteLLM 价格表计算请求费用
  */
 
-import { readFileSync, writeFileSync } from 'fs'
+import { readFileSync, writeFileSync, existsSync } from 'fs'
 import { join } from 'path'
 import { createLogger } from '../utils/logger.js'
 
 const logger = createLogger('Pricing')
 
-// 价格表路径
-const PRICE_JSON_PATH = join(__dirname, '../config/price.json')
+// 价格表路径 - 优先使用 data 目录（Docker 挂载），回退到项目根目录
+function getPriceJsonPath(): string {
+  // Docker 环境: /app/data/price.json
+  const dockerPath = '/app/data/price.json'
+  if (existsSync(dockerPath)) {
+    return dockerPath
+  }
+
+  // 本地开发环境: 项目根目录/data/price.json
+  const localPath = join(process.cwd(), 'data/price.json')
+  if (existsSync(localPath)) {
+    return localPath
+  }
+
+  // 回退到相对于 __dirname 的路径
+  return join(__dirname, '../../data/price.json')
+}
+
+const PRICE_JSON_PATH = getPriceJsonPath()
 
 // LiteLLM 远程价格表 URL
 const LITELLM_PRICE_URL = 'https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json'
