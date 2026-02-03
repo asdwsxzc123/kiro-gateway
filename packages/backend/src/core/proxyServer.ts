@@ -36,7 +36,11 @@ import { createLogger } from '../utils/logger.js'
 import { refreshTokenByMethod, needsTokenRefresh } from './tokenRefresh.js'
 import { hasWebSearchTool, handleWebSearchStream } from './websearch.js'
 import * as logStore from '../storage/logStore.js'
+import * as statsStore from '../storage/statsStore.js'
 import { calculateCost } from './pricing.js'
+import { calculateCacheRatio, splitTokensByRatio } from './cacheTracker.js'
+import type { CacheRatio, CacheCalculation } from './cacheTracker.js'
+import { computeSessionHash, getSessionAccount, setSessionAccount } from './sessionCache.js'
 
 const logger = createLogger('ProxyServer')
 
@@ -512,13 +516,28 @@ export class ProxyServer {
     this.recordNewRequest()
     this.events.onRequest?.({ path: '/v1/messages', method: 'POST' })
 
-    const account = await this.getAvailableAccount()
+    // Sticky Session: try routing to bound account
+    const sessionHash = computeSessionHash(request, _headers?.['x-session-id'])
+    let account: ProxyAccount | null = null
+
+    if (sessionHash) {
+      const stickyAccountId = await getSessionAccount(sessionHash)
+      if (stickyAccountId) {
+        account = this.accountPool.getAccountIfAvailable(stickyAccountId)
+      }
+    }
+    if (!account) {
+      account = await this.getAvailableAccount()
+    }
     if (!account) {
       this.recordRequestFailed()
       return { success: false, error: 'No available accounts' }
     }
 
     const startTime = Date.now()
+
+    // Calculate cache ratio (atomic check + write)
+    const cacheRatio = await calculateCacheRatio(account.id, request)
 
     try {
       const { result, account: usedAccount } = await this.callWithRetry(
@@ -544,18 +563,49 @@ export class ProxyServer {
         outputTokens: result.usage.outputTokens
       })
 
-      const cacheWrite2 = (result.usage as Record<string, number>).cacheWriteTokens || 0
-      const cacheRead2 = (result.usage as Record<string, number>).cacheReadTokens || 0
-      const cost2 = calculateCost(request.model, result.usage.inputTokens, result.usage.outputTokens, cacheWrite2, cacheRead2)
+      // Split tokens by cache ratio
+      const cacheCalc = splitTokensByRatio(cacheRatio, result.usage.inputTokens)
+
+      // Bind Sticky Session
+      if (sessionHash) {
+        setSessionAccount(sessionHash, usedAccount.id).catch(() => {})
+      }
+
+      // Cache-aware cost calculation
+      const cost2 = calculateCost(
+        request.model,
+        cacheCalc.totalInputTokens,
+        result.usage.outputTokens,
+        cacheCalc.cacheCreationTokens,
+        cacheCalc.cacheReadTokens
+      )
+
+      // Update memory stats
+      this.stats.cacheCreationTokens += cacheCalc.cacheCreationTokens
+      this.stats.cacheReadTokens += cacheCalc.cacheReadTokens
+
+      // Persist to Redis
+      statsStore.updateGlobalStats(
+        true,
+        result.usage.inputTokens,
+        result.usage.outputTokens,
+        0,
+        cost2.totalCost,
+        cacheCalc.cacheCreationTokens,
+        cacheCalc.cacheReadTokens
+      ).catch(err => {
+        logger.error('Failed to persist global stats', { error: (err as Error).message })
+      })
+
       this.recordRequest({
         path: '/v1/messages',
         model: request.model,
         accountId: usedAccount.id,
         machineId: usedAccount.machineId,
-        inputTokens: result.usage.inputTokens,
+        inputTokens: cacheCalc.uncachedTokens,
         outputTokens: result.usage.outputTokens,
-        cacheCreationTokens: cacheWrite2,
-        cacheReadTokens: cacheRead2,
+        cacheCreationTokens: cacheCalc.cacheCreationTokens,
+        cacheReadTokens: cacheCalc.cacheReadTokens,
         cost: cost2.totalCost,
         responseTime: Date.now() - startTime,
         success: true
@@ -864,7 +914,19 @@ export class ProxyServer {
     this.recordNewRequest()
     this.events.onRequest?.({ path: '/v1/messages', method: 'POST' })
 
-    const account = await this.getAvailableAccount()
+    // Sticky Session: try routing to bound account
+    const sessionHash = computeSessionHash(request, headers?.['x-session-id'])
+    let account: ProxyAccount | null = null
+
+    if (sessionHash) {
+      const stickyAccountId = await getSessionAccount(sessionHash)
+      if (stickyAccountId) {
+        account = this.accountPool.getAccountIfAvailable(stickyAccountId)
+      }
+    }
+    if (!account) {
+      account = await this.getAvailableAccount()
+    }
     if (!account) {
       this.recordRequestFailed()
       callbacks.onError(new Error('No available accounts'))
@@ -912,6 +974,9 @@ export class ProxyServer {
         logger.info('Thinking mode enabled for Claude request')
       }
 
+      // Calculate cache ratio before the API call
+      const cacheRatio = await calculateCacheRatio(account.id, request)
+
       await this.handleClaudeStream(
         callbacks,
         account,
@@ -922,7 +987,9 @@ export class ProxyServer {
         undefined,
         false,
         0,
-        matchedApiKey
+        matchedApiKey,
+        cacheRatio,
+        sessionHash
       )
 
       callbacks.onComplete()
@@ -962,7 +1029,9 @@ export class ProxyServer {
     msgId?: string,
     _headersSent: boolean = false,
     contentBlockIndex: number = 0,
-    matchedApiKey?: ApiKey
+    matchedApiKey?: ApiKey,
+    cacheRatio?: CacheRatio | null,
+    sessionHash?: string | null
   ): Promise<void> {
     const id = msgId || `msg_${uuidv4()}`
     let currentBlockIndex = contentBlockIndex
@@ -1195,6 +1264,19 @@ export class ProxyServer {
           this.stats.totalCredits += usage.credits || 0
           this.accountPool.recordSuccess(account.id, usage.inputTokens + usage.outputTokens)
 
+          // Split tokens by cache ratio (only when ratio was calculated in first round)
+          let cacheCalc: CacheCalculation | null = null
+          if (cacheRatio) {
+            cacheCalc = splitTokensByRatio(cacheRatio, usage.inputTokens)
+            this.stats.cacheCreationTokens += cacheCalc.cacheCreationTokens
+            this.stats.cacheReadTokens += cacheCalc.cacheReadTokens
+          }
+
+          // Bind Sticky Session
+          if (sessionHash) {
+            setSessionAccount(sessionHash, account.id).catch(() => {})
+          }
+
           this.events.onResponse?.({
             path: '/v1/messages',
             model,
@@ -1205,20 +1287,38 @@ export class ProxyServer {
             credits: usage.credits
           })
 
-          const costStream2 = calculateCost(model, usage.inputTokens, usage.outputTokens, usage.cacheWriteTokens || 0, usage.cacheReadTokens || 0)
+          const costStream2 = calculateCost(
+            model,
+            cacheCalc ? cacheCalc.totalInputTokens : usage.inputTokens,
+            usage.outputTokens,
+            cacheCalc?.cacheCreationTokens ?? (usage.cacheWriteTokens || 0),
+            cacheCalc?.cacheReadTokens ?? (usage.cacheReadTokens || 0)
+          )
           this.recordRequest({
             path: '/v1/messages',
             model,
             accountId: account.id,
             machineId: account.machineId,
-            inputTokens: usage.inputTokens,
+            inputTokens: cacheCalc?.uncachedTokens ?? usage.inputTokens,
             outputTokens: usage.outputTokens,
-            cacheCreationTokens: usage.cacheWriteTokens || 0,
-            cacheReadTokens: usage.cacheReadTokens || 0,
+            cacheCreationTokens: cacheCalc?.cacheCreationTokens ?? (usage.cacheWriteTokens || 0),
+            cacheReadTokens: cacheCalc?.cacheReadTokens ?? (usage.cacheReadTokens || 0),
             cost: costStream2.totalCost,
             credits: usage.credits,
             responseTime: Date.now() - startTime,
             success: true
+          })
+
+          statsStore.updateGlobalStats(
+            true,
+            usage.inputTokens,
+            usage.outputTokens,
+            usage.credits || 0,
+            costStream2.totalCost,
+            cacheCalc?.cacheCreationTokens ?? 0,
+            cacheCalc?.cacheReadTokens ?? 0
+          ).catch(err => {
+            logger.error('Failed to persist global stats', { error: (err as Error).message })
           })
 
           if (matchedApiKey) {
@@ -1285,7 +1385,9 @@ export class ProxyServer {
                 id,
                 true,
                 currentBlockIndex,
-                matchedApiKey
+                matchedApiKey,
+                null,          // don't recalculate cache ratio in auto-continue
+                sessionHash    // keep session hash for binding
               )
             } catch (error) {
               logger.error('Claude auto-continue error', { error: (error as Error).message })

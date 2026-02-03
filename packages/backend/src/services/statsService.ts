@@ -17,6 +17,11 @@ export interface StatsOverview {
     total: number
     available: number
   }
+  cache: {
+    cacheCreationTokens: number
+    cacheReadTokens: number
+    cacheHitRate: number
+  }
   uptime: number
 }
 
@@ -33,6 +38,11 @@ export async function getStatsOverview(): Promise<StatsOverview> {
     accounts: {
       total: totalAccounts,
       available: availableAccounts
+    },
+    cache: {
+      cacheCreationTokens: global.cacheCreationTokens,
+      cacheReadTokens: global.cacheReadTokens,
+      cacheHitRate: global.inputTokens > 0 ? global.cacheReadTokens / global.inputTokens : 0
     },
     uptime: Date.now() - global.startTime
   }
@@ -96,4 +106,20 @@ export async function getDetailedReport(): Promise<{
   ])
 
   return { overview, accountStats, modelStats }
+}
+
+/**
+ * 获取缓存统计
+ */
+export async function getCacheStats(): Promise<{
+  cacheCreationTokens: number
+  cacheReadTokens: number
+  cacheHitRate: number
+}> {
+  const global = await statsStore.getGlobalStats()
+  return {
+    cacheCreationTokens: global.cacheCreationTokens,
+    cacheReadTokens: global.cacheReadTokens,
+    cacheHitRate: global.inputTokens > 0 ? global.cacheReadTokens / global.inputTokens : 0
+  }
 }

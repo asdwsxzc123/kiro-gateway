@@ -113,6 +113,9 @@ export interface ProxyStats {
   totalCredits: number;
   inputTokens: number;
   outputTokens: number;
+  totalCost: number;
+  cacheCreationTokens: number;
+  cacheReadTokens: number;
   startTime: number;
 }
 

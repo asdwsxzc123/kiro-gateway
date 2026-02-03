@@ -119,6 +119,7 @@ export interface ClaudeMessage {
 export interface ClaudeSystemBlock {
   type: 'text'
   text: string
+  cache_control?: { type: 'ephemeral' }
 }
 
 export interface ClaudeContentBlock {
@@ -131,6 +132,7 @@ export interface ClaudeContentBlock {
   input?: unknown
   tool_use_id?: string
   content?: string | ClaudeContentBlock[]
+  cache_control?: { type: 'ephemeral' }
 }
 
 export interface ClaudeTool {

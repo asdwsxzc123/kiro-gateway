@@ -98,6 +98,9 @@ router.post('/chat/completions', async (req: Request, res: Response) => {
     if (req.headers['anthropic-beta']) {
       headers['anthropic-beta'] = req.headers['anthropic-beta'] as string
     }
+    if (req.headers['x-session-id']) {
+      headers['x-session-id'] = req.headers['x-session-id'] as string
+    }
 
     if (isStream) {
       // 流式响应
@@ -189,6 +192,9 @@ router.post('/messages', async (req: Request, res: Response) => {
     const headers: Record<string, string> = {}
     if (req.headers['anthropic-beta']) {
       headers['anthropic-beta'] = req.headers['anthropic-beta'] as string
+    }
+    if (req.headers['x-session-id']) {
+      headers['x-session-id'] = req.headers['x-session-id'] as string
     }
 
     if (isStream) {

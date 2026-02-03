@@ -302,6 +302,26 @@ export class AccountPool {
   }
 
   /**
+   * 如果指定账号可用则返回，否则返回 null（由调用方 fallback 到轮询）
+   * 检查条件：账号存在 + isAvailable + 不在 cooldown 期 + 不需要 refresh
+   */
+  getAccountIfAvailable(id: string): ProxyAccount | null {
+    const account = this.accounts.get(id)
+    if (!account) return null
+
+    const stats = this.accountStats.get(id)
+    if (!stats) return null
+
+    if (!stats.isAvailable) return null
+    if (stats.needsRefresh) return null
+
+    const now = Date.now()
+    if (account.cooldownUntil && account.cooldownUntil > now) return null
+
+    return account
+  }
+
+  /**
    * 清空账号池
    */
   clear(): void {

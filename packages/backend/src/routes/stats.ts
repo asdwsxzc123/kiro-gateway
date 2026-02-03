@@ -132,4 +132,21 @@ router.post('/reset', async (_req: Request, res: Response) => {
   }
 })
 
+/**
+ * 获取缓存统计
+ * GET /api/stats/cache
+ */
+router.get('/cache', async (_req: Request, res: Response) => {
+  try {
+    const stats = await statsService.getCacheStats()
+    res.json({ success: true, data: stats } as ApiResponse)
+  } catch (error) {
+    logger.error('Failed to get cache stats', { error: (error as Error).message })
+    res.status(500).json({
+      success: false,
+      error: { message: (error as Error).message }
+    } as ApiResponse)
+  }
+})
+
 export default router
