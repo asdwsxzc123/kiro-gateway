@@ -2,6 +2,18 @@
 
 All notable changes to this project will be documented in this file. See [standard-version](https://github.com/conventional-changelog/standard-version) for commit guidelines.
 
+## [1.3.0](https://github.com/asdwsxzc123/kiro-gateway/compare/v1.2.0...v1.3.0) (2026-02-03)
+
+
+### Features
+
+* 升级 ([777e6bf](https://github.com/asdwsxzc123/kiro-gateway/commit/777e6bfef2ccfc2bf9ffe6cdf8c1ba91e8c2e52b))
+
+
+### Bug Fixes
+
+* 修复价格逻辑 ([29b4c6d](https://github.com/asdwsxzc123/kiro-gateway/commit/29b4c6dbe5a669d339f702286a06022935b89a96))
+
 ## 1.2.0 (2026-02-03)
 
 
