@@ -1510,9 +1510,18 @@ export class ProxyServer {
           } else {
             // 发送 message_delta
             const stopReason = hasToolCalls ? 'tool_use' : 'end_turn'
+            // 获取缓存 token 数据（优先使用 cacheCalc，否则使用 usage 中的原始数据）
+            const cacheWriteTokens = cacheCalc?.cacheCreationTokens ?? (usage.cacheWriteTokens || 0)
+            const cacheReadTokens = cacheCalc?.cacheReadTokens ?? (usage.cacheReadTokens || 0)
             const messageDelta = createClaudeStreamEvent('message_delta', {
               delta: { type: 'message_delta', stop_reason: stopReason, stop_sequence: undefined },
-              usage: { input_tokens: usage.inputTokens, output_tokens: usage.outputTokens }
+              usage: {
+                input_tokens: usage.inputTokens,
+                output_tokens: usage.outputTokens,
+                // 仅在有值时添加缓存字段，与非流式响应保持一致
+                ...(cacheWriteTokens ? { cache_creation_input_tokens: cacheWriteTokens } : {}),
+                ...(cacheReadTokens ? { cache_read_input_tokens: cacheReadTokens } : {})
+              }
             })
             callbacks.onChunk(`event: message_delta\ndata: ${JSON.stringify(messageDelta)}\n\n`)
             // 发送 message_stop
