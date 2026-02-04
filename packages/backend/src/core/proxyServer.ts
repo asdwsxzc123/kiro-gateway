@@ -522,15 +522,6 @@ export class ProxyServer {
         error: (error as Error).message
       })
 
-      this.recordRequest({
-        path: '/v1/chat/completions',
-        model: request.model,
-        accountId: account.id,
-        responseTime: Date.now() - startTime,
-        success: false,
-        error: (error as Error).message
-      })
-
       return { success: false, error: (error as Error).message }
     }
   }
@@ -691,15 +682,6 @@ export class ProxyServer {
         path: '/v1/messages',
         model: request.model,
         status: 500,
-        error: (error as Error).message
-      })
-
-      this.recordRequest({
-        path: '/v1/messages',
-        model: request.model,
-        accountId: account.id,
-        responseTime: Date.now() - startTime,
-        success: false,
         error: (error as Error).message
       })
 
@@ -957,15 +939,6 @@ export class ProxyServer {
         error: (error as Error).message
       })
 
-      this.recordRequest({
-        path: '/v1/chat/completions',
-        model: request.model,
-        accountId: account.id,
-        responseTime: Date.now() - startTime,
-        success: false,
-        error: (error as Error).message
-      })
-
       callbacks.onError(error as Error)
     }
   }
@@ -1072,15 +1045,6 @@ export class ProxyServer {
         error: (error as Error).message
       })
 
-      this.recordRequest({
-        path: '/v1/messages',
-        model: request.model,
-        accountId: account.id,
-        responseTime: Date.now() - startTime,
-        success: false,
-        error: (error as Error).message
-      })
-
       callbacks.onError(error as Error)
     }
   }
@@ -1118,8 +1082,8 @@ export class ProxyServer {
     let textBuffer = ''
     let inThinkingTagBlock = false
 
-    // 估算输入 tokens
-    const estimatedInputTokens = Math.max(1, Math.round(JSON.stringify(kiroPayload).length / 3))
+    // 估算输入 tokens（基于 payload 大小）
+    const estimatedInputTokens = Math.max(1, Math.round(JSON.stringify(kiroPayload).length / 30))
 
     // 关闭 thinking 块的辅助函数
     const closeThinkingBlock = () => {
@@ -1256,7 +1220,12 @@ export class ProxyServer {
           model,
           stop_reason: null,
           stop_sequence: null,
-          usage: { input_tokens: estimatedInputTokens, output_tokens: 0 }
+          usage: {
+            input_tokens: estimatedInputTokens,
+            output_tokens: 0,
+            cache_creation_input_tokens: 0,
+            cache_read_input_tokens: 0
+          }
         }
       })
       callbacks.onChunk(`event: message_start\ndata: ${JSON.stringify(messageStart)}\n\n`)
@@ -1514,13 +1483,12 @@ export class ProxyServer {
             const cacheWriteTokens = cacheCalc?.cacheCreationTokens ?? (usage.cacheWriteTokens || 0)
             const cacheReadTokens = cacheCalc?.cacheReadTokens ?? (usage.cacheReadTokens || 0)
             const messageDelta = createClaudeStreamEvent('message_delta', {
-              delta: { type: 'message_delta', stop_reason: stopReason, stop_sequence: undefined },
+              delta: { stop_reason: stopReason, stop_sequence: null },
               usage: {
                 input_tokens: usage.inputTokens,
                 output_tokens: usage.outputTokens,
-                // 仅在有值时添加缓存字段，与非流式响应保持一致
-                ...(cacheWriteTokens ? { cache_creation_input_tokens: cacheWriteTokens } : {}),
-                ...(cacheReadTokens ? { cache_read_input_tokens: cacheReadTokens } : {})
+                cache_creation_input_tokens: cacheWriteTokens,
+                cache_read_input_tokens: cacheReadTokens
               }
             })
             callbacks.onChunk(`event: message_delta\ndata: ${JSON.stringify(messageDelta)}\n\n`)

@@ -164,8 +164,13 @@ export interface ClaudeStreamEvent {
   message?: Partial<ClaudeResponse>
   index?: number
   content_block?: ClaudeContentBlock | { type: 'thinking'; thinking: string }
-  delta?: { type: string; text?: string; thinking?: string; stop_reason?: string; stop_sequence?: string }
-  usage?: { input_tokens?: number; output_tokens: number }
+  delta?: { type?: string; text?: string; thinking?: string; stop_reason?: string; stop_sequence?: string | null }
+  usage?: {
+    input_tokens?: number
+    output_tokens: number
+    cache_creation_input_tokens?: number
+    cache_read_input_tokens?: number
+  }
   error?: { type: string; message: string }
 }
 

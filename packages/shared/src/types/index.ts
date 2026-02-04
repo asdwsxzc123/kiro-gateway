@@ -180,6 +180,7 @@ export interface LogsQuery {
   offset?: number;
   startTime?: number;
   endTime?: number;
+  model?: string;
 }
 
 /**

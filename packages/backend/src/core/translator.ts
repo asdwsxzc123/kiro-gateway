@@ -643,8 +643,8 @@ export function kiroToClaudeResponse(
     usage: {
       input_tokens: usage.inputTokens,
       output_tokens: usage.outputTokens,
-      ...(usage.cacheCreationTokens ? { cache_creation_input_tokens: usage.cacheCreationTokens } : {}),
-      ...(usage.cacheReadTokens ? { cache_read_input_tokens: usage.cacheReadTokens } : {})
+      cache_creation_input_tokens: usage.cacheCreationTokens || 0,
+      cache_read_input_tokens: usage.cacheReadTokens || 0
     }
   }
 }

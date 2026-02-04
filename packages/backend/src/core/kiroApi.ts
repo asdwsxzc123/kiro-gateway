@@ -66,6 +66,7 @@ const MODEL_ID_MAP: Record<string, string> = {
   'claude-opus-4.5': 'claude-opus-4.5',
   'claude-sonnet-4': 'claude-sonnet-4',
   'claude-sonnet-4-20250514': 'claude-sonnet-4',
+  'claude-sonnet-4-20250529': 'claude-sonnet-4',
   'claude-3-5-sonnet': 'claude-sonnet-4.5',
   'claude-3-opus': 'claude-sonnet-4.5',
   'claude-3-sonnet': 'claude-sonnet-4',
