@@ -63,6 +63,15 @@ const CLAUDE_PRICES: Record<string, ModelPriceInfo> = {
     max_output_tokens: 32000,
     supports_prompt_caching: true
   },
+  'claude-opus-4-5-20251101': {
+    input_cost_per_token: 0.000015,
+    output_cost_per_token: 0.000075,
+    cache_creation_input_token_cost: 0.00001875,
+    cache_read_input_token_cost: 0.0000015,
+    max_input_tokens: 200000,
+    max_output_tokens: 32000,
+    supports_prompt_caching: true
+  },
   'claude-opus-4-5': {
     input_cost_per_token: 0.000015,
     output_cost_per_token: 0.000075,
@@ -133,6 +142,15 @@ const CLAUDE_PRICES: Record<string, ModelPriceInfo> = {
 
   // Claude Haiku 4.5
   'claude-haiku-4-5-20250929': {
+    input_cost_per_token: 0.0000008,
+    output_cost_per_token: 0.000004,
+    cache_creation_input_token_cost: 0.000001,
+    cache_read_input_token_cost: 0.00000008,
+    max_input_tokens: 200000,
+    max_output_tokens: 8192,
+    supports_prompt_caching: true
+  },
+  'claude-haiku-4-5-20251001': {
     input_cost_per_token: 0.0000008,
     output_cost_per_token: 0.000004,
     cache_creation_input_token_cost: 0.000001,
@@ -235,11 +253,68 @@ export function reloadPriceConfig(): Record<string, ModelPriceInfo> {
   return CLAUDE_PRICES
 }
 
+// 默认兜底模型（sonnet 4.5）
+const DEFAULT_FALLBACK_MODEL = 'claude-sonnet-4-5'
+
+/**
+ * 从模型名称中提取系列和版本信息
+ * 例如: claude-opus-4-5-20251101 -> { series: 'opus', version: '4.5' }
+ */
+function extractModelInfo(model: string): { series: string | null; version: string | null } {
+  const lowerModel = model.toLowerCase()
+
+  // 提取系列: opus, sonnet, haiku
+  let series: string | null = null
+  if (lowerModel.includes('opus')) series = 'opus'
+  else if (lowerModel.includes('sonnet')) series = 'sonnet'
+  else if (lowerModel.includes('haiku')) series = 'haiku'
+
+  // 提取版本: 4.5, 4, 3.5, 3
+  let version: string | null = null
+  // 匹配 4.5, 4-5, 45 等格式
+  if (lowerModel.includes('4.5') || lowerModel.includes('4-5') || lowerModel.includes('45')) {
+    version = '4.5'
+  } else if (lowerModel.includes('3.5') || lowerModel.includes('3-5') || lowerModel.includes('35')) {
+    version = '3.5'
+  } else if (lowerModel.includes('-4-') || lowerModel.includes('-4') || lowerModel.match(/claude-\w+-4$/)) {
+    version = '4'
+  } else if (lowerModel.includes('-3-') || lowerModel.includes('-3') || lowerModel.match(/claude-\w+-3$/)) {
+    version = '3'
+  }
+
+  return { series, version }
+}
+
+/**
+ * 根据系列和版本获取对应的基准模型名
+ */
+function getBaseModelName(series: string, version: string): string {
+  // 映射到价格表中存在的基准模型名
+  const modelMap: Record<string, Record<string, string>> = {
+    'opus': {
+      '4.5': 'claude-opus-4-5',
+      '4': 'claude-opus-4',
+      '3': 'claude-3-opus'
+    },
+    'sonnet': {
+      '4.5': 'claude-sonnet-4-5',
+      '4': 'claude-sonnet-4',
+      '3.5': 'claude-3.5-sonnet'
+    },
+    'haiku': {
+      '4.5': 'claude-haiku-4-5',
+      '3.5': 'claude-3.5-haiku'
+    }
+  }
+
+  return modelMap[series]?.[version] || DEFAULT_FALLBACK_MODEL
+}
+
 /**
  * 查找模型的价格信息
- * 支持精确匹配和模糊匹配
+ * 支持精确匹配、模糊匹配和兜底
  */
-export function findModelPrice(model: string): ModelPriceInfo | null {
+export function findModelPrice(model: string): ModelPriceInfo {
   // 1. 精确匹配
   if (CLAUDE_PRICES[model]) return CLAUDE_PRICES[model]
 
@@ -247,25 +322,39 @@ export function findModelPrice(model: string): ModelPriceInfo | null {
   const normalized = model.replace(/\./g, '-')
   if (CLAUDE_PRICES[normalized]) return CLAUDE_PRICES[normalized]
 
-  // 3. 模糊匹配
+  // 3. 大小写不敏感的精确匹配
   const lowerModel = model.toLowerCase()
   for (const [key, value] of Object.entries(CLAUDE_PRICES)) {
     if (key.toLowerCase() === lowerModel) return value
-    // 匹配包含模型名的 key
-    if (key.toLowerCase().includes(lowerModel.replace('claude-', ''))) {
-      return value
+  }
+
+  // 4. 基于系列和版本的智能匹配
+  const { series, version } = extractModelInfo(model)
+  if (series && version) {
+    const baseModel = getBaseModelName(series, version)
+    if (CLAUDE_PRICES[baseModel]) {
+      logger.debug('Model matched by series/version', { model, matchedTo: baseModel })
+      return CLAUDE_PRICES[baseModel]
     }
   }
 
-  // 4. 前缀匹配
-  for (const [key, value] of Object.entries(CLAUDE_PRICES)) {
-    if (key.startsWith(normalized)) {
-      return value
+  // 5. 仅基于系列的匹配（使用该系列最新版本）
+  if (series) {
+    const seriesDefaults: Record<string, string> = {
+      'opus': 'claude-opus-4-5',
+      'sonnet': 'claude-sonnet-4-5',
+      'haiku': 'claude-haiku-4-5'
+    }
+    const defaultModel = seriesDefaults[series]
+    if (defaultModel && CLAUDE_PRICES[defaultModel]) {
+      logger.debug('Model matched by series only', { model, matchedTo: defaultModel })
+      return CLAUDE_PRICES[defaultModel]
     }
   }
 
-  logger.debug('No price info found for model', { model })
-  return null
+  // 6. 兜底：未知模型按 sonnet 4.5 计费
+  logger.warn('Unknown model, using fallback pricing (sonnet 4.5)', { model })
+  return CLAUDE_PRICES[DEFAULT_FALLBACK_MODEL]
 }
 
 /**
@@ -283,17 +372,8 @@ export function calculateCost(
   cacheCreationTokens: number = 0,
   cacheReadTokens: number = 0
 ): CostCalculation {
+  // findModelPrice 现在总是返回价格信息（有兜底）
   const priceInfo = findModelPrice(model)
-
-  if (!priceInfo) {
-    return {
-      inputCost: 0,
-      outputCost: 0,
-      cacheCreationCost: 0,
-      cacheReadCost: 0,
-      totalCost: 0
-    }
-  }
 
   // Compute actual non-cached input tokens
   // The inputTokens from Kiro includes uncached + cacheRead + cacheWrite
