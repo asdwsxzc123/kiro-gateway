@@ -10,14 +10,22 @@ import type { RequestLog, SystemLog } from '../core/types.js'
 const logger = createLogger('LogService')
 
 /**
- * 获取请求日志
+ * 获取请求日志（支持分页和过滤）
+ * @param limit 每页数量
+ * @param offset 偏移量
+ * @param startTime 开始时间
+ * @param endTime 结束时间
+ * @param model 模型名称过滤
+ * @returns 日志列表和总数
  */
 export async function getRequestLogs(
   limit: number = 100,
+  offset: number = 0,
   startTime?: number,
-  endTime?: number
-): Promise<RequestLog[]> {
-  return logStore.getRequestLogs(limit, startTime, endTime)
+  endTime?: number,
+  model?: string
+): Promise<{ data: RequestLog[]; total: number }> {
+  return logStore.getRequestLogs(limit, offset, startTime, endTime, model)
 }
 
 /**
@@ -97,7 +105,8 @@ export async function getRequestLogSummary(hours: number = 24): Promise<{
   avgResponseTime: number
 }> {
   const startTime = Date.now() - hours * 60 * 60 * 1000
-  const logs = await logStore.getRequestLogs(10000, startTime)
+  const result = await logStore.getRequestLogs(10000, 0, startTime)
+  const logs = result.data
 
   const total = logs.length
   const success = logs.filter(l => l.success).length

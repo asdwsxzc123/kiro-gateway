@@ -1,11 +1,13 @@
 import { apiClient } from "./client"
-import type { RequestLog, SystemLog, LogsQuery, LogsSummary, ApiResponse } from "@kiro-gateway/shared"
+import type { RequestLog, SystemLog, LogsQuery, LogsSummary, ApiResponse, PaginatedLogsResponse } from "@kiro-gateway/shared"
 
 /**
- * 获取请求日志
+ * 获取请求日志（支持分页）
+ * @param query 查询参数
+ * @returns 分页日志响应
  */
-export async function getRequestLogs(query: LogsQuery = {}): Promise<RequestLog[]> {
-  const response = await apiClient.get<ApiResponse<RequestLog[]>>("/logs/requests", {
+export async function getRequestLogs(query: LogsQuery = {}): Promise<PaginatedLogsResponse<RequestLog>> {
+  const response = await apiClient.get<ApiResponse<PaginatedLogsResponse<RequestLog>>>("/logs/requests", {
     params: query,
   })
   return response.data.data!

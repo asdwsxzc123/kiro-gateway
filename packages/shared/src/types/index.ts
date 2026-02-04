@@ -177,8 +177,19 @@ export interface SystemLog {
 
 export interface LogsQuery {
   limit?: number;
+  offset?: number;
   startTime?: number;
   endTime?: number;
+}
+
+/**
+ * 分页日志响应
+ */
+export interface PaginatedLogsResponse<T> {
+  data: T[];
+  total: number;
+  limit: number;
+  offset: number;
 }
 
 export interface LogsSummary {

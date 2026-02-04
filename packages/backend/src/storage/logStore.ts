@@ -76,49 +76,75 @@ export async function addRequestLog(log: Omit<RequestLog, 'id'>): Promise<string
 }
 
 /**
- * 获取请求日志
+ * 获取请求日志（支持分页和过滤）
+ * @param limit 每页数量
+ * @param offset 偏移量
+ * @param startTime 开始时间
+ * @param endTime 结束时间
+ * @param model 模型名称过滤
+ * @returns 日志列表和总数
  */
 export async function getRequestLogs(
   limit: number = 100,
+  offset: number = 0,
   startTime?: number,
-  endTime?: number
-): Promise<RequestLog[]> {
+  endTime?: number,
+  model?: string
+): Promise<{ data: RequestLog[]; total: number }> {
   const redis = getRedisClient()
 
   try {
-    // 使用 XREVRANGE 获取最新的日志
+    // 使用 XREVRANGE 获取日志
     const start = endTime ? String(endTime) : '+'
     const end = startTime ? String(startTime) : '-'
 
-    const entries = await redis.xrevrange(REQUEST_LOGS_STREAM, start, end, 'COUNT', limit)
+    // 如果有 model 过滤，需要获取更多数据进行过滤
+    const fetchCount = model ? (offset + limit) * 10 : offset + limit
+    const entries = await redis.xrevrange(REQUEST_LOGS_STREAM, start, end, 'COUNT', fetchCount)
 
-    return entries.map(([, fields]) => {
-      const data: Record<string, string> = {}
+    // 解析所有日志
+    const allLogs: RequestLog[] = entries.map(([, fields]) => {
+      const record: Record<string, string> = {}
       for (let i = 0; i < fields.length; i += 2) {
-        data[fields[i]] = fields[i + 1]
+        record[fields[i]] = fields[i + 1]
       }
 
       return {
-        id: data.id,
-        timestamp: parseInt(data.timestamp, 10),
-        path: data.path,
-        model: data.model,
-        accountId: data.accountId,
-        machineId: data.machineId,
-        inputTokens: parseInt(data.inputTokens, 10),
-        outputTokens: parseInt(data.outputTokens, 10),
-        credits: data.credits ? parseFloat(data.credits) : undefined,
-        cacheCreationTokens: data.cacheCreationTokens ? parseInt(data.cacheCreationTokens, 10) : undefined,
-        cacheReadTokens: data.cacheReadTokens ? parseInt(data.cacheReadTokens, 10) : undefined,
-        cost: data.cost ? parseFloat(data.cost) : undefined,
-        responseTime: parseInt(data.responseTime, 10),
-        success: data.success === 'true',
-        error: data.error
+        id: record.id,
+        timestamp: parseInt(record.timestamp, 10),
+        path: record.path,
+        model: record.model,
+        accountId: record.accountId,
+        machineId: record.machineId,
+        inputTokens: parseInt(record.inputTokens, 10),
+        outputTokens: parseInt(record.outputTokens, 10),
+        credits: record.credits ? parseFloat(record.credits) : undefined,
+        cacheCreationTokens: record.cacheCreationTokens ? parseInt(record.cacheCreationTokens, 10) : undefined,
+        cacheReadTokens: record.cacheReadTokens ? parseInt(record.cacheReadTokens, 10) : undefined,
+        cost: record.cost ? parseFloat(record.cost) : undefined,
+        responseTime: parseInt(record.responseTime, 10),
+        success: record.success === 'true',
+        error: record.error
       }
     })
+
+    // 应用 model 过滤
+    const filteredLogs = model
+      ? allLogs.filter(log => log.model === model)
+      : allLogs
+
+    // 计算过滤后的总数
+    const total = model
+      ? filteredLogs.length
+      : await redis.xlen(REQUEST_LOGS_STREAM)
+
+    // 分页
+    const data = filteredLogs.slice(offset, offset + limit)
+
+    return { data, total }
   } catch (error) {
     logger.error('Failed to get request logs', { error: (error as Error).message })
-    return []
+    return { data: [], total: 0 }
   }
 }
 
