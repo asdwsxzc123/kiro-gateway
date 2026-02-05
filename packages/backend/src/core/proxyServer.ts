@@ -1083,7 +1083,7 @@ export class ProxyServer {
     let inThinkingTagBlock = false
 
     // 估算输入 tokens（基于 payload 大小）
-    const estimatedInputTokens = Math.max(1, Math.round(JSON.stringify(kiroPayload).length / 30))
+    const estimatedInputTokens = Math.max(1, Math.round(JSON.stringify(kiroPayload).length / 3))
 
     // 关闭 thinking 块的辅助函数
     const closeThinkingBlock = () => {
@@ -1488,7 +1488,12 @@ export class ProxyServer {
                 input_tokens: usage.inputTokens,
                 output_tokens: usage.outputTokens,
                 cache_creation_input_tokens: cacheWriteTokens,
-                cache_read_input_tokens: cacheReadTokens
+                cache_read_input_tokens: cacheReadTokens,
+                // 上游 API 格式的详细 cache 信息
+                cache_creation: {
+                  ephemeral_1h_input_tokens: 0,  // Kiro API 暂不区分，全部计入 5m
+                  ephemeral_5m_input_tokens: cacheWriteTokens
+                }
               }
             })
             callbacks.onChunk(`event: message_delta\ndata: ${JSON.stringify(messageDelta)}\n\n`)

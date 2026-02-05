@@ -1,70 +1,248 @@
 /**
  * Token 计算模块
- * 基于字符单位的 token 估算算法
+ * 使用 js-tiktoken (cl100k_base) 进行 token 计数
  *
- * 计算规则：
- * - 非西文字符：每个计 4 个字符单位
- * - 西文字符：每个计 1 个字符单位
- * - 4 个字符单位 = 1 token
+ * 注意事项：
+ * - cl100k_base 是 GPT-4 的编码器，与 Claude 的实际 tokenizer 存在差异
+ * - 使用 1.15 修正系数作为经验值补偿
+ * - 用于预估和展示，关键场景应以 API 返回的实际 token 数为准
  */
 
+import { getEncoding as getTiktokenEncoding, type Tiktoken } from 'js-tiktoken'
+import type {
+  ClaudeMessage,
+  ClaudeContentBlock,
+  ClaudeTool,
+  ClaudeSystemBlock,
+} from './types.js'
+
+// ============ 常量定义 ============
+
 /**
- * 判断字符是否为非西文字符
- * 西文字符包括 ASCII、拉丁字母扩展等
+ * Claude 修正系数
+ * 经验值：Claude 比 GPT-4 (cl100k_base) 多约 15% token
  */
-function isNonWesternChar(c: string): boolean {
-  const code = c.codePointAt(0)!
-  // ASCII (U+0000..U+007F)
-  if (code <= 0x007F) return false
-  // Latin Extended-A/B (U+0080..U+024F)
-  if (code >= 0x0080 && code <= 0x024F) return false
-  // Latin Extended Additional (U+1E00..U+1EFF)
-  if (code >= 0x1E00 && code <= 0x1EFF) return false
-  // Latin Extended-C (U+2C60..U+2C7F)
-  if (code >= 0x2C60 && code <= 0x2C7F) return false
-  // Latin Extended-D (U+A720..U+A7FF)
-  if (code >= 0xA720 && code <= 0xA7FF) return false
-  // Latin Extended-E (U+AB30..U+AB6F)
-  if (code >= 0xAB30 && code <= 0xAB6F) return false
-  return true
+const CLAUDE_CORRECTION_FACTOR = 1.15
+
+/**
+ * 消息结构开销（role + 分隔符）
+ */
+const MESSAGE_OVERHEAD_TOKENS = 4
+
+/**
+ * 最终服务 token
+ */
+const FINAL_SERVICE_TOKENS = 3
+
+/**
+ * 每个工具/tool_call 开销
+ */
+const TOOL_OVERHEAD_TOKENS = 4
+
+/**
+ * 图片 token 估算
+ * Claude 图片 token 取决于分辨率，范围约 85-1590 tokens
+ * 这里使用保守的中等估算值
+ */
+const IMAGE_ESTIMATE_TOKENS = 200
+
+// ============ 编码器缓存 ============
+
+/**
+ * 编码器缓存
+ * - null: 未初始化
+ * - false: 初始化失败
+ * - Tiktoken: 初始化成功
+ */
+let _encoding: Tiktoken | false | null = null
+
+/**
+ * 获取 tiktoken 编码器（懒加载 + 缓存）
+ * @returns 编码器实例，初始化失败时返回 null
+ */
+function getTokenEncoder(): Tiktoken | null {
+  if (_encoding === null) {
+    try {
+      _encoding = getTiktokenEncoding('cl100k_base')
+    } catch (e) {
+      console.warn('[TokenCounter] tiktoken not available, using fallback estimation')
+      _encoding = false // 标记初始化失败
+    }
+  }
+  return _encoding || null
 }
+
+// ============ 核心计数函数 ============
 
 /**
  * 计算文本的 token 数量
+ * @param text - 要计算的文本
+ * @param applyCorrection - 是否应用 Claude 修正系数（默认 true）
+ * @returns token 数量
  */
-function countTokens(text: string): number {
-  let charUnits = 0
-  for (const c of text) {
-    charUnits += isNonWesternChar(c) ? 4.0 : 1.0
-  }
+function countTokens(text: string, applyCorrection = true): number {
+  if (!text) return 0
 
-  const tokens = charUnits / 4.0
+  const encoder = getTokenEncoder()
+  let baseTokens: number
 
-  let accToken: number
-  if (tokens < 100) {
-    accToken = tokens * 1.5
-  } else if (tokens < 200) {
-    accToken = tokens * 1.3
-  } else if (tokens < 300) {
-    accToken = tokens * 1.25
-  } else if (tokens < 800) {
-    accToken = tokens * 1.2
+  if (encoder) {
+    try {
+      baseTokens = encoder.encode(text).length
+    } catch {
+      // 编码失败时使用 fallback
+      baseTokens = Math.floor(text.length / 4) + 1
+    }
   } else {
-    accToken = tokens * 1.0
+    // Fallback: ~4 字符/token
+    baseTokens = Math.floor(text.length / 4) + 1
   }
 
-  return Math.floor(accToken)
+  return applyCorrection
+    ? Math.floor(baseTokens * CLAUDE_CORRECTION_FACTOR)
+    : baseTokens
 }
+
+/**
+ * 计算 Claude 内容块的 token 数量
+ * @param blocks - Claude 内容块数组
+ * @returns token 数量（不含修正系数）
+ */
+function countClaudeContentBlocks(blocks: ClaudeContentBlock[]): number {
+  let total = 0
+
+  for (const block of blocks) {
+    switch (block.type) {
+      case 'text':
+        // 文本内容
+        total += countTokens(block.text || '', false)
+        break
+
+      case 'thinking':
+        // 思考内容
+        total += countTokens(block.thinking || '', false)
+        break
+
+      case 'image':
+        // 图片 token 估算
+        total += IMAGE_ESTIMATE_TOKENS
+        break
+
+      case 'tool_use':
+        // 工具调用
+        total += TOOL_OVERHEAD_TOKENS
+        total += countTokens(block.name || '', false)
+        // input 是对象，需要序列化
+        if (block.input !== undefined) {
+          total += countTokens(
+            typeof block.input === 'string'
+              ? block.input
+              : JSON.stringify(block.input),
+            false
+          )
+        }
+        break
+
+      case 'tool_result':
+        // 工具结果
+        total += TOOL_OVERHEAD_TOKENS
+        total += countTokens(block.tool_use_id || '', false)
+        if (typeof block.content === 'string') {
+          total += countTokens(block.content, false)
+        } else if (Array.isArray(block.content)) {
+          // 递归处理嵌套内容块
+          total += countClaudeContentBlocks(block.content)
+        }
+        break
+    }
+  }
+
+  return total
+}
+
+/**
+ * 计算 Claude 格式消息的 token 数量
+ * @param messages - Claude 消息数组
+ * @param applyCorrection - 是否应用 Claude 修正系数（默认 true）
+ * @returns token 数量
+ */
+function countClaudeMessageTokens(
+  messages: ClaudeMessage[],
+  applyCorrection = true
+): number {
+  let total = 0
+
+  for (const msg of messages) {
+    // 消息结构开销
+    total += MESSAGE_OVERHEAD_TOKENS
+
+    // role
+    total += countTokens(msg.role, false)
+
+    // content
+    const content = msg.content
+    if (typeof content === 'string') {
+      total += countTokens(content, false)
+    } else if (Array.isArray(content)) {
+      total += countClaudeContentBlocks(content)
+    }
+  }
+
+  // 最终服务 token
+  total += FINAL_SERVICE_TOKENS
+
+  return applyCorrection
+    ? Math.floor(total * CLAUDE_CORRECTION_FACTOR)
+    : total
+}
+
+/**
+ * 计算 Claude 格式工具定义的 token 数量
+ * @param tools - Claude 工具定义数组
+ * @param applyCorrection - 是否应用 Claude 修正系数（默认 true）
+ * @returns token 数量
+ */
+function countClaudeToolsTokens(
+  tools: ClaudeTool[] | undefined,
+  applyCorrection = true
+): number {
+  if (!tools?.length) return 0
+
+  let total = 0
+
+  for (const tool of tools) {
+    total += TOOL_OVERHEAD_TOKENS
+    total += countTokens(tool.name, false)
+    if (tool.description) {
+      total += countTokens(tool.description, false)
+    }
+    if (tool.input_schema) {
+      total += countTokens(JSON.stringify(tool.input_schema), false)
+    }
+  }
+
+  return applyCorrection
+    ? Math.floor(total * CLAUDE_CORRECTION_FACTOR)
+    : total
+}
+
+// ============ 导出函数 ============
 
 /**
  * 估算请求的输入 tokens（本地计算）
  * 支持 Claude API 的 count_tokens 请求格式
+ *
+ * @param _model - 模型名称（预留，当前未使用）
+ * @param system - 系统消息（字符串或 ClaudeSystemBlock 数组）
+ * @param messages - 消息列表
+ * @param tools - 工具定义列表
+ * @returns 估算的 token 数量
  */
 export function countAllTokens(
   _model: string,
   system: unknown,
-  messages: Array<{ role: string; content: unknown }>,
-  tools?: Array<{ name: string; description?: string; input_schema?: unknown }>
+  messages: ClaudeMessage[],
+  tools?: ClaudeTool[]
 ): number {
   let total = 0
 
@@ -73,43 +251,21 @@ export function countAllTokens(
     if (typeof system === 'string') {
       total += countTokens(system)
     } else if (Array.isArray(system)) {
-      for (const item of system) {
+      for (const item of system as ClaudeSystemBlock[]) {
         if (typeof item === 'string') {
           total += countTokens(item)
-        } else if (item && typeof item === 'object' && 'text' in item) {
-          total += countTokens(String((item as { text: string }).text))
+        } else if (item?.text) {
+          total += countTokens(item.text)
         }
       }
     }
   }
 
-  // 消息内容
-  for (const msg of messages) {
-    if (typeof msg.content === 'string') {
-      total += countTokens(msg.content)
-    } else if (Array.isArray(msg.content)) {
-      for (const item of msg.content) {
-        if (item && typeof item === 'object') {
-          if ('text' in item && typeof (item as { text: string }).text === 'string') {
-            total += countTokens((item as { text: string }).text)
-          }
-        }
-      }
-    }
-  }
+  // 消息（内部已应用修正系数）
+  total += countClaudeMessageTokens(messages)
 
-  // 工具定义
-  if (tools) {
-    for (const tool of tools) {
-      total += countTokens(tool.name)
-      if (tool.description) {
-        total += countTokens(tool.description)
-      }
-      if (tool.input_schema) {
-        total += countTokens(JSON.stringify(tool.input_schema))
-      }
-    }
-  }
+  // 工具（内部已应用修正系数）
+  total += countClaudeToolsTokens(tools)
 
   return Math.max(total, 1)
 }

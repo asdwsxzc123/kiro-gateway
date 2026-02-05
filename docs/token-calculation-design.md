@@ -17,7 +17,7 @@ Gateway 返回给 Claude Code 的 `input_tokens` 与 Claude Code 自身计算的
 1. **`message_start` 事件中的 `input_tokens` 使用粗糙估算**：
    ```typescript
    // proxyServer.ts:1122
-   const estimatedInputTokens = Math.max(1, Math.round(JSON.stringify(kiroPayload).length / 3))
+   const estimatedInputTokens = Math.max(1, Math.round(JSON.stringify(kiroPayload).length / 3/4))
    ```
 
 2. **模型映射缺失**：`claude-sonnet-4-20250529` 未在 `kiroApi.ts` 中映射

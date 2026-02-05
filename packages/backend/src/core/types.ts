@@ -143,6 +143,12 @@ export interface ClaudeTool {
   max_uses?: number       // WebSearch max uses
 }
 
+// Cache 创建详情（与上游 API 格式一致）
+export interface CacheCreationDetails {
+  ephemeral_1h_input_tokens: number
+  ephemeral_5m_input_tokens: number
+}
+
 export interface ClaudeResponse {
   id: string
   type: 'message'
@@ -156,6 +162,8 @@ export interface ClaudeResponse {
     output_tokens: number
     cache_creation_input_tokens?: number
     cache_read_input_tokens?: number
+    // 上游 API 格式的详细 cache 信息
+    cache_creation?: CacheCreationDetails
   }
 }
 
@@ -170,6 +178,8 @@ export interface ClaudeStreamEvent {
     output_tokens: number
     cache_creation_input_tokens?: number
     cache_read_input_tokens?: number
+    // 上游 API 格式的详细 cache 信息
+    cache_creation?: CacheCreationDetails
   }
   error?: { type: string; message: string }
 }
