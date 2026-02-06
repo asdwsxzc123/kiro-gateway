@@ -33,7 +33,47 @@ export interface CostCalculation {
  * 数据来源: https://www.anthropic.com/pricing
  */
 const CLAUDE_PRICES: Record<string, ModelPriceInfo> = {
-  // Claude 4 Opus
+  // Claude Opus 4.6 — $5/$25 per Mtok
+  'claude-opus-4-6': {
+    input_cost_per_token: 0.000005,
+    output_cost_per_token: 0.000025,
+    cache_creation_input_token_cost: 0.00000625,
+    cache_read_input_token_cost: 0.0000005,
+    max_input_tokens: 200000,
+    max_output_tokens: 32000,
+    supports_prompt_caching: true
+  },
+  'claude-opus-4.6': {
+    input_cost_per_token: 0.000005,
+    output_cost_per_token: 0.000025,
+    cache_creation_input_token_cost: 0.00000625,
+    cache_read_input_token_cost: 0.0000005,
+    max_input_tokens: 200000,
+    max_output_tokens: 32000,
+    supports_prompt_caching: true
+  },
+
+  // Claude Opus 4.6 (1M context) — $10/$37.50 per Mtok
+  'claude-opus-4-6-1m': {
+    input_cost_per_token: 0.00001,
+    output_cost_per_token: 0.0000375,
+    cache_creation_input_token_cost: 0.0000125,
+    cache_read_input_token_cost: 0.000001,
+    max_input_tokens: 1000000,
+    max_output_tokens: 32000,
+    supports_prompt_caching: true
+  },
+  'claude-opus-4.6-1m': {
+    input_cost_per_token: 0.00001,
+    output_cost_per_token: 0.0000375,
+    cache_creation_input_token_cost: 0.0000125,
+    cache_read_input_token_cost: 0.000001,
+    max_input_tokens: 1000000,
+    max_output_tokens: 32000,
+    supports_prompt_caching: true
+  },
+
+  // Claude 4 Opus — $15/$75 per Mtok
   'claude-4-opus-20250514': {
     input_cost_per_token: 0.000015,
     output_cost_per_token: 0.000075,
@@ -269,10 +309,11 @@ function extractModelInfo(model: string): { series: string | null; version: stri
   else if (lowerModel.includes('sonnet')) series = 'sonnet'
   else if (lowerModel.includes('haiku')) series = 'haiku'
 
-  // 提取版本: 4.5, 4, 3.5, 3
+  // 提取版本: 4.6, 4.5, 4, 3.5, 3（从高到低匹配，避免误匹配）
   let version: string | null = null
-  // 匹配 4.5, 4-5, 45 等格式
-  if (lowerModel.includes('4.5') || lowerModel.includes('4-5') || lowerModel.includes('45')) {
+  if (lowerModel.includes('4.6') || lowerModel.includes('4-6')) {
+    version = '4.6'
+  } else if (lowerModel.includes('4.5') || lowerModel.includes('4-5') || lowerModel.includes('45')) {
     version = '4.5'
   } else if (lowerModel.includes('3.5') || lowerModel.includes('3-5') || lowerModel.includes('35')) {
     version = '3.5'
@@ -292,6 +333,7 @@ function getBaseModelName(series: string, version: string): string {
   // 映射到价格表中存在的基准模型名
   const modelMap: Record<string, Record<string, string>> = {
     'opus': {
+      '4.6': 'claude-opus-4-6',
       '4.5': 'claude-opus-4-5',
       '4': 'claude-opus-4',
       '3': 'claude-3-opus'
@@ -341,7 +383,7 @@ export function findModelPrice(model: string): ModelPriceInfo {
   // 5. 仅基于系列的匹配（使用该系列最新版本）
   if (series) {
     const seriesDefaults: Record<string, string> = {
-      'opus': 'claude-opus-4-5',
+      'opus': 'claude-opus-4-6',
       'sonnet': 'claude-sonnet-4-5',
       'haiku': 'claude-haiku-4-5'
     }

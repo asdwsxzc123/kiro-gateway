@@ -66,6 +66,7 @@ const MODEL_ID_MAP: Record<string, string> = {
   'claude-opus-4.5': 'claude-opus-4.5',
   'claude-sonnet-4': 'claude-sonnet-4',
   'claude-sonnet-4-20250514': 'claude-sonnet-4',
+  'claude-sonnet-4-20250529': 'claude-sonnet-4',
   'claude-3-5-sonnet': 'claude-sonnet-4.5',
   'claude-3-opus': 'claude-sonnet-4.5',
   'claude-3-sonnet': 'claude-sonnet-4',
@@ -701,12 +702,16 @@ async function parseEventStream(
             // 处理 messageMetadataEvent
             if (eventType === 'messageMetadataEvent' || event.messageMetadataEvent) {
               const metadata = event.messageMetadataEvent || event
+              // 调试：打印完整的 tokenUsage 数据
+              console.log('[messageMetadataEvent] tokenUsage:', JSON.stringify(metadata.tokenUsage, null, 2))
               if (metadata.tokenUsage) {
                 const tokenUsage = metadata.tokenUsage
                 const uncached = tokenUsage.uncachedInputTokens || 0
                 const cacheRead = tokenUsage.cacheReadInputTokens || 0
                 const cacheWrite = tokenUsage.cacheWriteInputTokens || 0
                 const calculatedInput = uncached + cacheRead + cacheWrite
+
+                console.log('[messageMetadataEvent] parsed:', { uncached, cacheRead, cacheWrite, calculatedInput })
 
                 if (calculatedInput > 0) usage.inputTokens = calculatedInput
                 if (tokenUsage.outputTokens) usage.outputTokens = tokenUsage.outputTokens
@@ -968,6 +973,7 @@ export async function callKiroApiStream(
 
 /**
  * 非流式调用（等待完整响应）
+ * 返回包含 cache tokens 的完整 usage 信息
  */
 export async function callKiroApi(
   account: ProxyAccount,
@@ -976,12 +982,26 @@ export async function callKiroApi(
 ): Promise<{
   content: string
   toolUses: KiroToolUse[]
-  usage: { inputTokens: number; outputTokens: number; credits: number }
+  usage: {
+    inputTokens: number
+    outputTokens: number
+    credits: number
+    cacheReadTokens?: number
+    cacheWriteTokens?: number
+    reasoningTokens?: number
+  }
 }> {
   return new Promise((resolve, reject) => {
     let content = ''
     const toolUses: KiroToolUse[] = []
-    let usage = { inputTokens: 0, outputTokens: 0, credits: 0 }
+    let usage = {
+      inputTokens: 0,
+      outputTokens: 0,
+      credits: 0,
+      cacheReadTokens: 0,
+      cacheWriteTokens: 0,
+      reasoningTokens: 0
+    }
 
     callKiroApiStream(
       account,
@@ -993,7 +1013,15 @@ export async function callKiroApi(
         }
       },
       (u) => {
-        usage = u
+        // 保留所有 usage 字段，包括 cache tokens
+        usage = {
+          inputTokens: u.inputTokens,
+          outputTokens: u.outputTokens,
+          credits: u.credits,
+          cacheReadTokens: u.cacheReadTokens || 0,
+          cacheWriteTokens: u.cacheWriteTokens || 0,
+          reasoningTokens: u.reasoningTokens || 0
+        }
         resolve({ content, toolUses, usage })
       },
       reject,

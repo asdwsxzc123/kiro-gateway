@@ -177,8 +177,20 @@ export interface SystemLog {
 
 export interface LogsQuery {
   limit?: number;
+  offset?: number;
   startTime?: number;
   endTime?: number;
+  model?: string;
+}
+
+/**
+ * 分页日志响应
+ */
+export interface PaginatedLogsResponse<T> {
+  data: T[];
+  total: number;
+  limit: number;
+  offset: number;
 }
 
 export interface LogsSummary {
@@ -301,12 +313,14 @@ export interface ApiKeyRecord {
   key?: string;
   name: string;
   keyPreview?: string;
+  boundAccountIds?: string[];  // 绑定的账号 ID 列表
   createdAt: number;
   lastUsed?: number;
 }
 
 export interface CreateApiKeyRequest {
   name: string;
+  boundAccountIds?: string[];  // 创建时可选绑定账号
 }
 
 /**

@@ -302,6 +302,32 @@ export class AccountPool {
   }
 
   /**
+   * 从指定的账号子集中轮询选择下一个可用账号
+   * 用于 API Key 绑定账号场景：只从绑定的账号中选择
+   */
+  getNextAccountFromSubset(accountIds: string[]): ProxyAccount | null {
+    if (accountIds.length === 0) return null
+
+    const now = Date.now()
+
+    // 第一轮：找可用的账号
+    for (const id of accountIds) {
+      const account = this.accounts.get(id)
+      const stats = this.accountStats.get(id)
+
+      if (!account || !stats) continue
+      if (!stats.isAvailable) continue
+      if (stats.needsRefresh) continue
+      if (account.cooldownUntil && account.cooldownUntil > now) continue
+
+      return account
+    }
+
+    // 没有可用账号，返回 null（不像全局轮询那样 fallback）
+    return null
+  }
+
+  /**
    * 如果指定账号可用则返回，否则返回 null（由调用方 fallback 到轮询）
    * 检查条件：账号存在 + isAvailable + 不在 cooldown 期 + 不需要 refresh
    */

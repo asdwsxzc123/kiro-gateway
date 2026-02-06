@@ -281,7 +281,7 @@ proxyService.handleOpenAIStreamRequest()
 |------|--------|------|
 | `PORT` | 3000 | 服务端口 |
 | `HOST` | 0.0.0.0 | 监听地址 |
-| `REDIS_URL` | redis://localhost:16999 | Redis 连接 |
+| `REDIS_URL` | redis://localhost:16379 | Redis 连接 |
 | `API_KEY` | - | API 密钥 |
 | `ENCRYPTION_KEY` | - | 加密密钥 |
 | `RATE_LIMIT_ENABLED` | false | 启用限流 |

@@ -610,11 +610,18 @@ function convertClaudeTools(tools?: { name: string; description: string; input_s
 
 /**
  * 将 Kiro 响应转换为 Claude 格式
+ * 支持 cacheWriteTokens (Kiro 格式) 和 cacheCreationTokens (Claude 格式) 两种字段名
  */
 export function kiroToClaudeResponse(
   content: string,
   toolUses: KiroToolUse[],
-  usage: { inputTokens: number; outputTokens: number; cacheCreationTokens?: number; cacheReadTokens?: number },
+  usage: {
+    inputTokens: number
+    outputTokens: number
+    cacheCreationTokens?: number  // Claude 格式
+    cacheWriteTokens?: number     // Kiro 格式
+    cacheReadTokens?: number
+  },
   model: string
 ): ClaudeResponse {
   const contentBlocks: ClaudeContentBlock[] = []
@@ -632,6 +639,10 @@ export function kiroToClaudeResponse(
     })
   }
 
+  // 兼容两种字段名: cacheWriteTokens (Kiro) 和 cacheCreationTokens (Claude)
+  const cacheCreationTokens = usage.cacheCreationTokens || usage.cacheWriteTokens || 0
+  const cacheReadTokens = usage.cacheReadTokens || 0
+
   return {
     id: `msg_${uuidv4()}`,
     type: 'message',
@@ -643,8 +654,13 @@ export function kiroToClaudeResponse(
     usage: {
       input_tokens: usage.inputTokens,
       output_tokens: usage.outputTokens,
-      ...(usage.cacheCreationTokens ? { cache_creation_input_tokens: usage.cacheCreationTokens } : {}),
-      ...(usage.cacheReadTokens ? { cache_read_input_tokens: usage.cacheReadTokens } : {})
+      cache_creation_input_tokens: cacheCreationTokens,
+      cache_read_input_tokens: cacheReadTokens,
+      // 上游 API 格式的详细 cache 信息
+      cache_creation: {
+        ephemeral_1h_input_tokens: 0,  // Kiro API 暂不区分，全部计入 5m
+        ephemeral_5m_input_tokens: cacheCreationTokens
+      }
     }
   }
 }
