@@ -1,17 +1,32 @@
 /**
  * API Key 认证中间件
+ * 验证 API Key 并将匹配的记录（含绑定账号信息）挂载到 req 上
  */
 
 import { Request, Response, NextFunction } from 'express'
 import { createLogger } from '../utils/logger.js'
 import { validateApiKey } from '../storage/configStore.js'
+import type { ApiKeyRecord } from '../storage/configStore.js'
 import { getConfig } from '../config/index.js'
+
+export type { ApiKeyRecord }
+
+// 扩展 Express Request 类型，添加 API Key 记录字段
+declare global {
+  namespace Express {
+    interface Request {
+      /** 认证通过后挂载的 API Key 记录（含 boundAccountIds） */
+      matchedApiKeyRecord?: ApiKeyRecord
+    }
+  }
+}
 
 const logger = createLogger('AuthMiddleware')
 
 /**
  * API Key 认证中间件
  * 从 Authorization header 或 x-api-key header 中提取 API Key
+ * 验证通过后将 ApiKeyRecord 挂载到 req.matchedApiKeyRecord
  */
 export async function authMiddleware(
   req: Request,
@@ -62,10 +77,10 @@ export async function authMiddleware(
     return
   }
 
-  // 验证 API Key
-  const isValid = await validateApiKey(apiKey)
+  // 验证 API Key，返回完整记录（含 boundAccountIds）
+  const record = await validateApiKey(apiKey)
 
-  if (!isValid) {
+  if (!record) {
     logger.warn('Invalid API key', { path: req.path, ip: req.ip })
     res.status(401).json({
       error: {
@@ -76,6 +91,8 @@ export async function authMiddleware(
     return
   }
 
+  // 挂载到 req 上，供下游路由使用
+  req.matchedApiKeyRecord = record
   next()
 }
 

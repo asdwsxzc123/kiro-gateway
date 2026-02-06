@@ -304,10 +304,24 @@ export class ProxyServer {
 
   // ============ 获取可用账号 ============
 
-  async getAvailableAccount(): Promise<ProxyAccount | null> {
-    const account = this.accountPool.getNextAccount()
+  /**
+   * 获取可用账号
+   * @param boundAccountIds 绑定的账号 ID 列表（API Key 维度），为空则使用全局轮询
+   */
+  async getAvailableAccount(boundAccountIds?: string[]): Promise<ProxyAccount | null> {
+    let account: ProxyAccount | null = null
+
+    // 如果指定了绑定账号，从子集中选择
+    if (boundAccountIds && boundAccountIds.length > 0) {
+      account = this.accountPool.getNextAccountFromSubset(boundAccountIds)
+    } else {
+      account = this.accountPool.getNextAccount()
+    }
+
     if (!account) {
-      logger.warn('No available accounts')
+      logger.warn('No available accounts', {
+        bound: boundAccountIds?.length ?? 0
+      })
       return null
     }
 
@@ -455,12 +469,13 @@ export class ProxyServer {
 
   async handleOpenAIRequest(
     request: OpenAIChatRequest,
-    _headers?: Record<string, string>
+    _headers?: Record<string, string>,
+    boundAccountIds?: string[]
   ): Promise<{ success: boolean; response?: unknown; error?: string }> {
     this.recordNewRequest()
     this.events.onRequest?.({ path: '/v1/chat/completions', method: 'POST' })
 
-    const account = await this.getAvailableAccount()
+    const account = await this.getAvailableAccount(boundAccountIds)
     if (!account) {
       this.recordRequestFailed()
       return { success: false, error: 'No available accounts' }
@@ -530,7 +545,8 @@ export class ProxyServer {
 
   async handleClaudeRequest(
     request: ClaudeRequest,
-    _headers?: Record<string, string>
+    _headers?: Record<string, string>,
+    boundAccountIds?: string[]
   ): Promise<{ success: boolean; response?: unknown; error?: string }> {
     this.recordNewRequest()
     this.events.onRequest?.({ path: '/v1/messages', method: 'POST' })
@@ -542,11 +558,15 @@ export class ProxyServer {
     if (sessionHash) {
       const stickyAccountId = await getSessionAccount(sessionHash)
       if (stickyAccountId) {
-        account = this.accountPool.getAccountIfAvailable(stickyAccountId)
+        // 如果 API Key 绑定了账号，sticky session 账号必须在绑定列表中
+        const inBoundList = !boundAccountIds || boundAccountIds.length === 0 || boundAccountIds.includes(stickyAccountId)
+        if (inBoundList) {
+          account = this.accountPool.getAccountIfAvailable(stickyAccountId)
+        }
       }
     }
     if (!account) {
-      account = await this.getAvailableAccount()
+      account = await this.getAvailableAccount(boundAccountIds)
     }
     if (!account) {
       this.recordRequestFailed()
@@ -699,12 +719,13 @@ export class ProxyServer {
       onError: (error: Error) => void
     },
     _headers?: Record<string, string>,
-    matchedApiKey?: ApiKey
+    matchedApiKey?: ApiKey,
+    boundAccountIds?: string[]
   ): Promise<void> {
     this.recordNewRequest()
     this.events.onRequest?.({ path: '/v1/chat/completions', method: 'POST' })
 
-    const account = await this.getAvailableAccount()
+    const account = await this.getAvailableAccount(boundAccountIds)
     if (!account) {
       this.recordRequestFailed()
       callbacks.onError(new Error('No available accounts'))
@@ -953,7 +974,8 @@ export class ProxyServer {
       onError: (error: Error) => void
     },
     headers?: Record<string, string>,
-    matchedApiKey?: ApiKey
+    matchedApiKey?: ApiKey,
+    boundAccountIds?: string[]
   ): Promise<void> {
     this.recordNewRequest()
     this.events.onRequest?.({ path: '/v1/messages', method: 'POST' })
@@ -965,11 +987,15 @@ export class ProxyServer {
     if (sessionHash) {
       const stickyAccountId = await getSessionAccount(sessionHash)
       if (stickyAccountId) {
-        account = this.accountPool.getAccountIfAvailable(stickyAccountId)
+        // 如果 API Key 绑定了账号，sticky session 账号必须在绑定列表中
+        const inBoundList = !boundAccountIds || boundAccountIds.length === 0 || boundAccountIds.includes(stickyAccountId)
+        if (inBoundList) {
+          account = this.accountPool.getAccountIfAvailable(stickyAccountId)
+        }
       }
     }
     if (!account) {
-      account = await this.getAvailableAccount()
+      account = await this.getAvailableAccount(boundAccountIds)
     }
     if (!account) {
       this.recordRequestFailed()

@@ -27,9 +27,18 @@ export async function getApiKeys(): Promise<ApiKeyRecord[]> {
 
 /**
  * 创建 API Key
+ * @param data { name: string, boundAccountIds?: string[] }
  */
-export async function createApiKey(data: CreateApiKeyRequest): Promise<ApiKeyRecord> {
+export async function createApiKey(data: CreateApiKeyRequest & { boundAccountIds?: string[] }): Promise<ApiKeyRecord> {
   const response = await apiClient.post<ApiResponse<ApiKeyRecord>>("/admin/apikeys", data)
+  return response.data.data!
+}
+
+/**
+ * 更新 API Key（名称、绑定账号）
+ */
+export async function updateApiKey(id: string, data: { name?: string; boundAccountIds?: string[] }): Promise<ApiKeyRecord> {
+  const response = await apiClient.put<ApiResponse<ApiKeyRecord>>(`/admin/apikeys/${id}`, data)
   return response.data.data!
 }
 

@@ -95,16 +95,18 @@ router.put('/selected-accounts', async (req: Request, res: Response) => {
 /**
  * 获取所有 API Key
  * GET /api/admin/apikeys
+ * 返回包含绑定账号信息的完整列表
  */
 router.get('/apikeys', async (_req: Request, res: Response) => {
   try {
     const keys = await configStore.getAllApiKeys()
-    // 返回完整 key 和预览
+    // 返回完整 key、预览和绑定账号
     const safeKeys = keys.map(k => ({
       id: k.id,
       name: k.name,
       key: k.key,  // 完整 key，用于复制
       keyPreview: k.key.substring(0, 8) + '...',  // 预览，用于显示
+      boundAccountIds: k.boundAccountIds || [],
       createdAt: k.createdAt,
       lastUsed: k.lastUsed
     }))
@@ -121,10 +123,11 @@ router.get('/apikeys', async (_req: Request, res: Response) => {
 /**
  * 创建 API Key
  * POST /api/admin/apikeys
+ * Body: { name: string, boundAccountIds?: string[] }
  */
 router.post('/apikeys', async (req: Request, res: Response) => {
   try {
-    const { name } = req.body
+    const { name, boundAccountIds } = req.body
     if (!name) {
       res.status(400).json({
         success: false,
@@ -140,16 +143,59 @@ router.post('/apikeys', async (req: Request, res: Response) => {
       id,
       key,
       name,
+      boundAccountIds: Array.isArray(boundAccountIds) ? boundAccountIds : undefined,
       createdAt: Date.now()
     })
 
     // 返回完整 key（仅在创建时显示一次）
     res.status(201).json({
       success: true,
-      data: { id, key, name }
+      data: { id, key, name, boundAccountIds: boundAccountIds || [] }
     } as ApiResponse)
   } catch (error) {
     logger.error('Failed to create API key', { error: (error as Error).message })
+    res.status(500).json({
+      success: false,
+      error: { message: (error as Error).message }
+    } as ApiResponse)
+  }
+})
+
+/**
+ * 更新 API Key（名称、绑定账号）
+ * PUT /api/admin/apikeys/:id
+ * Body: { name?: string, boundAccountIds?: string[] }
+ */
+router.put('/apikeys/:id', async (req: Request, res: Response) => {
+  try {
+    const id = req.params.id as string
+    const { name, boundAccountIds } = req.body
+
+    const updates: Partial<Pick<configStore.ApiKeyRecord, 'name' | 'boundAccountIds'>> = {}
+    if (name !== undefined) updates.name = name
+    if (boundAccountIds !== undefined) {
+      updates.boundAccountIds = Array.isArray(boundAccountIds) ? boundAccountIds : []
+    }
+
+    const record = await configStore.updateApiKey(id, updates)
+    if (!record) {
+      res.status(404).json({
+        success: false,
+        error: { message: 'API key not found' }
+      } as ApiResponse)
+      return
+    }
+
+    res.json({
+      success: true,
+      data: {
+        id: record.id,
+        name: record.name,
+        boundAccountIds: record.boundAccountIds || []
+      }
+    } as ApiResponse)
+  } catch (error) {
+    logger.error('Failed to update API key', { error: (error as Error).message })
     res.status(500).json({
       success: false,
       error: { message: (error as Error).message }

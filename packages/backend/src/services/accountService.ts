@@ -4,6 +4,7 @@
  */
 
 import * as accountStore from '../storage/accountStore.js'
+import * as configStore from '../storage/configStore.js'
 import { createLogger } from '../utils/logger.js'
 import { refreshTokenByMethod, needsTokenRefresh, isTokenExpired } from '../core/tokenRefresh.js'
 import { fetchKiroModels, fetchUsageLimits, callKiroApiStream } from '../core/kiroApi.js'
@@ -151,11 +152,23 @@ export async function updateAccount(id: string, updates: UpdateAccountRequest): 
 
 /**
  * 删除账号
+ * 级联清理：API Key 绑定、selectedAccounts
  */
 export async function deleteAccount(id: string): Promise<boolean> {
   const result = await accountStore.deleteAccount(id)
   if (result) {
-    logger.info('Account deleted', { id })
+    logger.info('Account deleted, starting cascade cleanup', { id })
+
+    // 1. 从所有 API Key 的 boundAccountIds 中移除该账号
+    const updatedKeys = await configStore.removeAccountFromApiKeys(id)
+    if (updatedKeys > 0) {
+      logger.info('Removed account from API key bindings', { accountId: id, updatedKeys })
+    }
+
+    // 2. 从 selectedAccounts 中移除该账号
+    await configStore.removeSelectedAccount(id)
+
+    logger.info('Account cascade cleanup completed', { id })
   }
   return result
 }

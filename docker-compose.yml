@@ -40,7 +40,7 @@ services:
     container_name: kiro-redis
     restart: unless-stopped
     ports:
-      - "${REDIS_PORT:-16999}:6379"
+      - "${REDIS_PORT:-16379}:6379"
     volumes:
       - redis-data:/data
     command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru

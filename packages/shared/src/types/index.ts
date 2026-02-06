@@ -313,12 +313,14 @@ export interface ApiKeyRecord {
   key?: string;
   name: string;
   keyPreview?: string;
+  boundAccountIds?: string[];  // 绑定的账号 ID 列表
   createdAt: number;
   lastUsed?: number;
 }
 
 export interface CreateApiKeyRequest {
   name: string;
+  boundAccountIds?: string[];  // 创建时可选绑定账号
 }
 
 /**
