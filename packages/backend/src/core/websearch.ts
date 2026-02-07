@@ -157,9 +157,7 @@ async function callMcpApi(
     'Authorization': `Bearer ${account.accessToken}`
   }
 
-  if (machineId) {
-    headers['x-amzn-device-id'] = machineId
-  }
+  // 注意：不添加 x-amzn-device-id header，machineId 已通过 User-Agent 传递（与 kiro-m 保持一致）
 
   const body = JSON.stringify(mcpRequest)
   logger.debug('MCP request', { url, bodyLength: body.length })

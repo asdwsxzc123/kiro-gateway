@@ -5,6 +5,7 @@
 
 import { createLogger } from '../utils/logger.js'
 import type { ProxyAccount, TokenRefreshResult } from './types.js'
+import { getKiroUserAgent } from './kiroApi.js'
 
 const logger = createLogger('TokenRefresh')
 
@@ -73,9 +74,12 @@ export async function refreshOidcToken(
 /**
  * 社交登录 Token 刷新 (GitHub/Google)
  * 使用 Kiro Auth Service
+ * @param refreshToken - 刷新令牌
+ * @param machineId - 机器码（可选，用于生成 User-Agent）
  */
 export async function refreshSocialToken(
-  refreshToken: string
+  refreshToken: string,
+  machineId?: string
 ): Promise<TokenRefreshResult> {
   logger.info('Refreshing social token')
 
@@ -86,7 +90,8 @@ export async function refreshSocialToken(
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'User-Agent': 'kiro-gateway/1.0.0'
+        // 关键修复：使用包含 machineId 的 User-Agent（与 kiro-m 保持一致）
+        'User-Agent': getKiroUserAgent(machineId)
       },
       body: JSON.stringify({ refreshToken })
     })
@@ -132,7 +137,8 @@ export async function refreshTokenByMethod(
 
   // 社交登录使用 Kiro Auth Service
   if (account.authMethod === 'social') {
-    return refreshSocialToken(account.refreshToken)
+    // 关键修复：传递 machineId 给 refreshSocialToken（与 kiro-m 保持一致）
+    return refreshSocialToken(account.refreshToken, account.machineId)
   }
 
   // IdC/BuilderId 使用 OIDC

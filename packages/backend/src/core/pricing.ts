@@ -93,6 +93,17 @@ const CLAUDE_PRICES: Record<string, ModelPriceInfo> = {
     supports_prompt_caching: true
   },
 
+  // Claude Opus 4.6 (date-specific)
+  'claude-opus-4-6-20260207': {
+    input_cost_per_token: 0.000005,
+    output_cost_per_token: 0.000025,
+    cache_creation_input_token_cost: 0.00000625,
+    cache_read_input_token_cost: 0.0000005,
+    max_input_tokens: 200000,
+    max_output_tokens: 32000,
+    supports_prompt_caching: true
+  },
+
   // Claude Opus 4.5
   'claude-opus-4-5-20250929': {
     input_cost_per_token: 0.000015,
