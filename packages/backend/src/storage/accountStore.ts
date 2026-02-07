@@ -18,8 +18,8 @@ const ACCOUNTS_INDEX = 'accounts:index'
 const ACCOUNTS_AVAILABLE = 'accounts:available'
 const MACHINE_IDS = 'machineIds'
 
-// 敏感字段列表（需要加密）
-const SENSITIVE_FIELDS = ['accessToken', 'refreshToken', 'clientSecret']
+// 敏感字段列表（不再加密，改为明文存储以方便管理）
+const SENSITIVE_FIELDS: string[] = []
 
 /**
  * 序列化账号数据（加密敏感字段）

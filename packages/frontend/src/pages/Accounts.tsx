@@ -39,6 +39,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { useToast } from "@/hooks/use-toast"
 import {
   getAccounts,
+  getAccount,
   addAccount,
   updateAccount,
   deleteAccount,
@@ -500,78 +501,60 @@ export function Accounts() {
 
   /**
    * 打开编辑对话框
-   * 预填充非敏感字段，敏感字段（token、secret）留空
+   * 从 API 获取完整账号信息（包含敏感字段）并预填充
    */
-  const handleOpenEditDialog = (account: Account) => {
+  const handleOpenEditDialog = async (account: Account) => {
     setEditingAccount(account)
-    // 只预填充非敏感字段
-    setEditForm({
-      email: account.email || "",
-      userId: account.userId || "",
-      accessToken: "", // 敏感信息不显示
-      refreshToken: "", // 敏感信息不显示
-      clientId: "", // 敏感信息不显示
-      clientSecret: "", // 敏感信息不显示
-      region: account.region || "",
-      authMethod: account.authMethod || "social",
-      provider: account.provider || "",
-      profileArn: account.profileArn || "",
-      machineId: account.machineId || "",
-      isAvailable: account.isAvailable ?? true,
-    })
-    setIsEditDialogOpen(true)
+
+    try {
+      // 调用 API 获取完整账号信息（包含敏感字段）
+      const fullAccount = await getAccount(account.id)
+
+      // 预填充所有字段（包括敏感字段）
+      setEditForm({
+        email: fullAccount.email || "",
+        userId: fullAccount.userId || "",
+        accessToken: fullAccount.accessToken || "",
+        refreshToken: fullAccount.refreshToken || "",
+        clientId: fullAccount.clientId || "",
+        clientSecret: fullAccount.clientSecret || "",
+        region: fullAccount.region || "",
+        authMethod: fullAccount.authMethod || "social",
+        provider: fullAccount.provider || "",
+        profileArn: fullAccount.profileArn || "",
+        machineId: fullAccount.machineId || "",
+        isAvailable: fullAccount.isAvailable ?? true,
+      })
+
+      setIsEditDialogOpen(true)
+    } catch (error) {
+      toast({
+        title: "获取账号详情失败",
+        description: (error as Error).message,
+        variant: "destructive",
+      })
+    }
   }
 
   /**
    * 处理更新账号
-   * 只提交有值的字段
+   * 提交所有字段（包括明文的敏感字段）
    */
   const handleUpdateAccount = () => {
     if (!editingAccount) return
 
-    // 构建更新数据，只包含有值的字段
-    const updateData: Partial<AddAccountRequest> = {}
-
-    // 非敏感字段：始终更新
-    if (editForm.email !== (editingAccount.email || "")) {
-      updateData.email = editForm.email || undefined
-    }
-    if (editForm.region !== (editingAccount.region || "")) {
-      updateData.region = editForm.region || undefined
-    }
-    if (editForm.authMethod !== (editingAccount.authMethod || "social")) {
-      updateData.authMethod = editForm.authMethod
-    }
-    if (editForm.provider !== (editingAccount.provider || "")) {
-      updateData.provider = editForm.provider || undefined
-    }
-    if (editForm.profileArn !== (editingAccount.profileArn || "")) {
-      updateData.profileArn = editForm.profileArn || undefined
-    }
-    if (editForm.machineId !== (editingAccount.machineId || "")) {
-      updateData.machineId = editForm.machineId || undefined
-    }
-
-    // 敏感字段：只有用户输入了新值才更新
-    if (editForm.accessToken) {
-      updateData.accessToken = editForm.accessToken
-    }
-    if (editForm.refreshToken) {
-      updateData.refreshToken = editForm.refreshToken
-    }
-    if (editForm.clientId) {
-      updateData.clientId = editForm.clientId
-    }
-    if (editForm.clientSecret) {
-      updateData.clientSecret = editForm.clientSecret
-    }
-
-    // 如果没有任何更新，直接关闭对话框
-    if (Object.keys(updateData).length === 0) {
-      setIsEditDialogOpen(false)
-      setEditingAccount(null)
-      toast({ title: "提示", description: "没有修改任何内容" })
-      return
+    // 构建更新数据，包含所有字段
+    const updateData: Partial<AddAccountRequest> = {
+      email: editForm.email || undefined,
+      region: editForm.region || undefined,
+      authMethod: editForm.authMethod,
+      provider: editForm.provider || undefined,
+      profileArn: editForm.profileArn || undefined,
+      machineId: editForm.machineId || undefined,
+      accessToken: editForm.accessToken || undefined,
+      refreshToken: editForm.refreshToken || undefined,
+      clientId: editForm.clientId || undefined,
+      clientSecret: editForm.clientSecret || undefined,
     }
 
     updateMutation.mutate({ id: editingAccount.id, data: updateData })
@@ -1073,7 +1056,7 @@ export function Accounts() {
             {/* 分隔线 */}
             <div className="border-t pt-4 mt-2">
               <p className="text-sm text-muted-foreground mb-4">
-                以下为敏感字段，留空表示不修改
+                以下为敏感字段（明文显示，可直接编辑）
               </p>
             </div>
 
@@ -1082,12 +1065,13 @@ export function Accounts() {
               <Label htmlFor="edit-accessToken">Access Token</Label>
               <Input
                 id="edit-accessToken"
-
-                placeholder="留空表示不修改"
+                type="text"
+                placeholder="Access Token"
                 value={editForm.accessToken}
                 onChange={(e) =>
                   setEditForm({ ...editForm, accessToken: e.target.value })
                 }
+                className="font-mono text-xs"
               />
             </div>
 
@@ -1096,12 +1080,13 @@ export function Accounts() {
               <Label htmlFor="edit-refreshToken">Refresh Token</Label>
               <Input
                 id="edit-refreshToken"
-
-                placeholder="留空表示不修改"
+                type="text"
+                placeholder="Refresh Token"
                 value={editForm.refreshToken}
                 onChange={(e) =>
                   setEditForm({ ...editForm, refreshToken: e.target.value })
                 }
+                className="font-mono text-xs"
               />
             </div>
 
@@ -1111,24 +1096,26 @@ export function Accounts() {
                 <Label htmlFor="edit-clientId">Client ID</Label>
                 <Input
                   id="edit-clientId"
-
-                  placeholder="留空表示不修改"
+                  type="text"
+                  placeholder="Client ID"
                   value={editForm.clientId}
                   onChange={(e) =>
                     setEditForm({ ...editForm, clientId: e.target.value })
                   }
+                  className="font-mono text-xs"
                 />
               </div>
               <div className="grid gap-2">
                 <Label htmlFor="edit-clientSecret">Client Secret</Label>
                 <Input
                   id="edit-clientSecret"
-
-                  placeholder="留空表示不修改"
+                  type="text"
+                  placeholder="Client Secret"
                   value={editForm.clientSecret}
                   onChange={(e) =>
                     setEditForm({ ...editForm, clientSecret: e.target.value })
                   }
+                  className="font-mono text-xs"
                 />
               </div>
             </div>

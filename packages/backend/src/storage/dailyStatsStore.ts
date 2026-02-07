@@ -116,7 +116,11 @@ export async function updateDailyGlobalStats(
     pipeline.hincrby(key, success ? 'successRequests' : 'failedRequests', 1)
     pipeline.hincrby(key, 'inputTokens', inputTokens)
     pipeline.hincrby(key, 'outputTokens', outputTokens)
-    pipeline.hincrby(key, 'totalTokens', inputTokens + outputTokens)
+    pipeline.hincrby(
+      key,
+      'totalTokens',
+      inputTokens + outputTokens + cacheCreationTokens + cacheReadTokens
+    )
     pipeline.hincrbyfloat(key, 'totalCredits', credits)
     pipeline.hincrbyfloat(key, 'totalCost', cost)
     pipeline.hincrby(key, 'cacheCreationTokens', cacheCreationTokens)
@@ -259,7 +263,11 @@ export async function updateDailyAccountStats(
     pipeline.hincrby(key, success ? 'successRequests' : 'failedRequests', 1)
     pipeline.hincrby(key, 'inputTokens', inputTokens)
     pipeline.hincrby(key, 'outputTokens', outputTokens)
-    pipeline.hincrby(key, 'totalTokens', inputTokens + outputTokens)
+    pipeline.hincrby(
+      key,
+      'totalTokens',
+      inputTokens + outputTokens + cacheCreationTokens + cacheReadTokens
+    )
     pipeline.hincrby(key, 'totalResponseTime', responseTime)
     pipeline.hincrbyfloat(key, 'totalCost', cost)
     pipeline.hincrby(key, 'cacheCreationTokens', cacheCreationTokens)

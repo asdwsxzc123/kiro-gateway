@@ -39,6 +39,7 @@ import { calculateCost } from './pricing.js'
 import { calculateCacheRatio, splitTokensByRatio } from './cacheTracker.js'
 import type { CacheRatio, CacheCalculation } from './cacheTracker.js'
 import { computeSessionHash, getSessionAccount, setSessionAccount } from './sessionCache.js'
+import { countAllTokens } from './tokenCounter.js'
 
 const logger = createLogger('ProxyServer')
 
@@ -505,25 +506,37 @@ export class ProxyServer {
         '/v1/messages'
       )
 
-      const response = kiroToClaudeResponse(result.content, result.toolUses, result.usage, request.model)
+      // Split tokens by cache ratio
+      const cacheCalc = splitTokensByRatio(cacheRatio, result.usage.inputTokens)
+      const uncachedInputTokens = cacheCalc.uncachedTokens
+      const totalInputTokens = cacheCalc.totalInputTokens
+
+      const response = kiroToClaudeResponse(
+        result.content,
+        result.toolUses,
+        {
+          ...result.usage,
+          inputTokens: uncachedInputTokens,
+          cacheWriteTokens: cacheCalc.cacheCreationTokens,
+          cacheReadTokens: cacheCalc.cacheReadTokens
+        },
+        request.model
+      )
 
       this.recordRequestSuccess()
-      this.stats.totalTokens += result.usage.inputTokens + result.usage.outputTokens
-      this.stats.inputTokens += result.usage.inputTokens
+      this.stats.totalTokens += totalInputTokens + result.usage.outputTokens
+      this.stats.inputTokens += uncachedInputTokens
       this.stats.outputTokens += result.usage.outputTokens
-      this.accountPool.recordSuccess(usedAccount.id, result.usage.inputTokens + result.usage.outputTokens)
+      this.accountPool.recordSuccess(usedAccount.id, totalInputTokens + result.usage.outputTokens)
 
       this.events.onResponse?.({
         path: '/v1/messages',
         model: request.model,
         status: 200,
-        tokens: result.usage.inputTokens + result.usage.outputTokens,
-        inputTokens: result.usage.inputTokens,
+        tokens: totalInputTokens + result.usage.outputTokens,
+        inputTokens: uncachedInputTokens,
         outputTokens: result.usage.outputTokens
       })
-
-      // Split tokens by cache ratio
-      const cacheCalc = splitTokensByRatio(cacheRatio, result.usage.inputTokens)
 
       // Bind Sticky Session
       if (sessionHash) {
@@ -546,7 +559,7 @@ export class ProxyServer {
       // Persist to Redis
       statsStore.updateGlobalStats(
         true,
-        result.usage.inputTokens,
+        uncachedInputTokens,
         result.usage.outputTokens,
         0,
         cost2.totalCost,
@@ -563,7 +576,7 @@ export class ProxyServer {
       await dailyStatsStore.updateDailyGlobalStats(
         today,
         true,
-        result.usage.inputTokens,
+        uncachedInputTokens,
         result.usage.outputTokens,
         0,
         cost2.totalCost,
@@ -578,7 +591,7 @@ export class ProxyServer {
         usedAccount.id,
         today,
         true,
-        result.usage.inputTokens,
+        uncachedInputTokens,
         result.usage.outputTokens,
         Date.now() - startTime,
         cost2.totalCost,
@@ -592,7 +605,7 @@ export class ProxyServer {
       await dailyStatsStore.updateDailyModelStats(
         request.model,
         today,
-        result.usage.inputTokens,
+        uncachedInputTokens,
         result.usage.outputTokens,
         cost2.totalCost
       ).catch(err => {
@@ -711,6 +724,12 @@ export class ProxyServer {
 
       // Calculate cache ratio before the API call
       const cacheRatio = await calculateCacheRatio(account.id, request)
+      const estimatedTotalInputTokens = countAllTokens(
+        request.model,
+        request.system,
+        request.messages,
+        request.tools
+      )
 
       await this.handleClaudeStream(
         callbacks,
@@ -724,7 +743,8 @@ export class ProxyServer {
         0,
         matchedApiKey,
         cacheRatio,
-        sessionHash
+        sessionHash,
+        estimatedTotalInputTokens
       )
 
       callbacks.onComplete()
@@ -757,7 +777,8 @@ export class ProxyServer {
     contentBlockIndex: number = 0,
     matchedApiKey?: ApiKey,
     cacheRatio?: CacheRatio | null,
-    sessionHash?: string | null
+    sessionHash?: string | null,
+    estimatedTotalInputTokens?: number
   ): Promise<void> {
     const id = msgId || `msg_${uuidv4()}`
     let currentBlockIndex = contentBlockIndex
@@ -773,8 +794,9 @@ export class ProxyServer {
     let textBuffer = ''
     let inThinkingTagBlock = false
 
-    // 估算输入 tokens（基于 payload 大小）
-    const estimatedInputTokens = Math.max(1, Math.round(JSON.stringify(kiroPayload).length / 3))
+    // 估算输入 tokens（优先使用原始 Claude 请求估算，否则降级为 payload 大小估算）
+    const estimatedInputTokens = estimatedTotalInputTokens ?? Math.max(1, Math.round(JSON.stringify(kiroPayload).length / 3))
+    const estimatedCacheCalc = cacheRatio ? splitTokensByRatio(cacheRatio, estimatedInputTokens) : null
 
     // 关闭 thinking 块的辅助函数
     const closeThinkingBlock = () => {
@@ -912,10 +934,10 @@ export class ProxyServer {
           stop_reason: null,
           stop_sequence: null,
           usage: {
-            input_tokens: estimatedInputTokens,
+            input_tokens: estimatedCacheCalc?.uncachedTokens ?? estimatedInputTokens,
             output_tokens: 0,
-            cache_creation_input_tokens: 0,
-            cache_read_input_tokens: 0
+            cache_creation_input_tokens: estimatedCacheCalc?.cacheCreationTokens ?? 0,
+            cache_read_input_tokens: estimatedCacheCalc?.cacheReadTokens ?? 0
           }
         }
       })
@@ -988,13 +1010,6 @@ export class ProxyServer {
             currentBlockIndex++
           }
 
-          this.recordRequestSuccess()
-          this.stats.totalTokens += usage.inputTokens + usage.outputTokens
-          this.stats.inputTokens += usage.inputTokens
-          this.stats.outputTokens += usage.outputTokens
-          this.stats.totalCredits += usage.credits || 0
-          this.accountPool.recordSuccess(account.id, usage.inputTokens + usage.outputTokens)
-
           // Split tokens by cache ratio (only when ratio was calculated in first round)
           let cacheCalc: CacheCalculation | null = null
           if (cacheRatio) {
@@ -1002,6 +1017,17 @@ export class ProxyServer {
             this.stats.cacheCreationTokens += cacheCalc.cacheCreationTokens
             this.stats.cacheReadTokens += cacheCalc.cacheReadTokens
           }
+          const cacheWriteTokens = cacheCalc?.cacheCreationTokens ?? (usage.cacheWriteTokens || 0)
+          const cacheReadTokens = cacheCalc?.cacheReadTokens ?? (usage.cacheReadTokens || 0)
+          const totalInputTokens = cacheCalc?.totalInputTokens ?? usage.inputTokens
+          const uncachedInputTokens = cacheCalc?.uncachedTokens ?? usage.inputTokens
+
+          this.recordRequestSuccess()
+          this.stats.totalTokens += totalInputTokens + usage.outputTokens
+          this.stats.inputTokens += uncachedInputTokens
+          this.stats.outputTokens += usage.outputTokens
+          this.stats.totalCredits += usage.credits || 0
+          this.accountPool.recordSuccess(account.id, totalInputTokens + usage.outputTokens)
 
           // Bind Sticky Session
           if (sessionHash) {
@@ -1012,28 +1038,28 @@ export class ProxyServer {
             path: '/v1/messages',
             model,
             status: 200,
-            tokens: usage.inputTokens + usage.outputTokens,
-            inputTokens: usage.inputTokens,
+            tokens: totalInputTokens + usage.outputTokens,
+            inputTokens: uncachedInputTokens,
             outputTokens: usage.outputTokens,
             credits: usage.credits
           })
 
           const costStream2 = calculateCost(
             model,
-            cacheCalc ? cacheCalc.totalInputTokens : usage.inputTokens,
+            totalInputTokens,
             usage.outputTokens,
-            cacheCalc?.cacheCreationTokens ?? (usage.cacheWriteTokens || 0),
-            cacheCalc?.cacheReadTokens ?? (usage.cacheReadTokens || 0)
+            cacheWriteTokens,
+            cacheReadTokens
           )
           this.recordRequest({
             path: '/v1/messages',
             model,
             accountId: account.id,
             machineId: account.machineId,
-            inputTokens: cacheCalc?.uncachedTokens ?? usage.inputTokens,
+            inputTokens: uncachedInputTokens,
             outputTokens: usage.outputTokens,
-            cacheCreationTokens: cacheCalc?.cacheCreationTokens ?? (usage.cacheWriteTokens || 0),
-            cacheReadTokens: cacheCalc?.cacheReadTokens ?? (usage.cacheReadTokens || 0),
+            cacheCreationTokens: cacheWriteTokens,
+            cacheReadTokens,
             cost: costStream2.totalCost,
             credits: usage.credits,
             responseTime: Date.now() - startTime,
@@ -1042,12 +1068,12 @@ export class ProxyServer {
 
           statsStore.updateGlobalStats(
             true,
-            usage.inputTokens,
+            uncachedInputTokens,
             usage.outputTokens,
             usage.credits || 0,
             costStream2.totalCost,
-            cacheCalc?.cacheCreationTokens ?? 0,
-            cacheCalc?.cacheReadTokens ?? 0
+            cacheWriteTokens,
+            cacheReadTokens
           ).catch(err => {
             logger.error('Failed to persist global stats', { error: (err as Error).message })
           })
@@ -1059,12 +1085,12 @@ export class ProxyServer {
           await dailyStatsStore.updateDailyGlobalStats(
             today,
             true,
-            usage.inputTokens,
+            uncachedInputTokens,
             usage.outputTokens,
             usage.credits || 0,
             costStream2.totalCost,
-            cacheCalc?.cacheCreationTokens ?? 0,
-            cacheCalc?.cacheReadTokens ?? 0
+            cacheWriteTokens,
+            cacheReadTokens
           ).catch(err => {
             logger.error('Failed to persist daily global stats', { error: (err as Error).message })
           })
@@ -1074,12 +1100,12 @@ export class ProxyServer {
             account.id,
             today,
             true,
-            usage.inputTokens,
+            uncachedInputTokens,
             usage.outputTokens,
             Date.now() - startTime,
             costStream2.totalCost,
-            cacheCalc?.cacheCreationTokens ?? 0,
-            cacheCalc?.cacheReadTokens ?? 0
+            cacheWriteTokens,
+            cacheReadTokens
           ).catch(err => {
             logger.error('Failed to persist daily account stats', { error: (err as Error).message })
           })
@@ -1088,7 +1114,7 @@ export class ProxyServer {
           await dailyStatsStore.updateDailyModelStats(
             model,
             today,
-            usage.inputTokens,
+            uncachedInputTokens,
             usage.outputTokens,
             costStream2.totalCost
           ).catch(err => {
@@ -1096,7 +1122,7 @@ export class ProxyServer {
           })
 
           if (matchedApiKey) {
-            this.recordApiKeyUsage(matchedApiKey.id, usage.credits || 0, usage.inputTokens, usage.outputTokens, costStream2.totalCost, model, '/v1/messages')
+            this.recordApiKeyUsage(matchedApiKey.id, usage.credits || 0, uncachedInputTokens, usage.outputTokens, costStream2.totalCost, model, '/v1/messages')
           }
 
           // 检查是否需要自动继续
@@ -1170,13 +1196,10 @@ export class ProxyServer {
           } else {
             // 发送 message_delta
             const stopReason = hasToolCalls ? 'tool_use' : 'end_turn'
-            // 获取缓存 token 数据（优先使用 cacheCalc，否则使用 usage 中的原始数据）
-            const cacheWriteTokens = cacheCalc?.cacheCreationTokens ?? (usage.cacheWriteTokens || 0)
-            const cacheReadTokens = cacheCalc?.cacheReadTokens ?? (usage.cacheReadTokens || 0)
             const messageDelta = createClaudeStreamEvent('message_delta', {
               delta: { stop_reason: stopReason, stop_sequence: null },
               usage: {
-                input_tokens: usage.inputTokens,
+                input_tokens: uncachedInputTokens,
                 output_tokens: usage.outputTokens,
                 cache_creation_input_tokens: cacheWriteTokens,
                 cache_read_input_tokens: cacheReadTokens,

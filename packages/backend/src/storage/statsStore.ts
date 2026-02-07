@@ -106,7 +106,11 @@ export async function updateGlobalStats(
     pipeline.hincrby(GLOBAL_STATS_KEY, success ? 'successRequests' : 'failedRequests', 1)
     pipeline.hincrby(GLOBAL_STATS_KEY, 'inputTokens', inputTokens)
     pipeline.hincrby(GLOBAL_STATS_KEY, 'outputTokens', outputTokens)
-    pipeline.hincrby(GLOBAL_STATS_KEY, 'totalTokens', inputTokens + outputTokens)
+    pipeline.hincrby(
+      GLOBAL_STATS_KEY,
+      'totalTokens',
+      inputTokens + outputTokens + cacheCreationTokens + cacheReadTokens
+    )
     pipeline.hincrbyfloat(GLOBAL_STATS_KEY, 'totalCredits', credits)
     pipeline.hincrbyfloat(GLOBAL_STATS_KEY, 'totalCost', cost)
     pipeline.hincrby(GLOBAL_STATS_KEY, 'cacheCreationTokens', cacheCreationTokens)
