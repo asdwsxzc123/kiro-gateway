@@ -53,6 +53,35 @@ const CLAUDE_PRICES: Record<string, ModelPriceInfo> = {
     supports_prompt_caching: true
   },
 
+  // Claude Opus 4.6
+  'claude-opus-4-6-20260207': {
+    input_cost_per_token: 0.000015,
+    output_cost_per_token: 0.000075,
+    cache_creation_input_token_cost: 0.00001875,
+    cache_read_input_token_cost: 0.0000015,
+    max_input_tokens: 200000,
+    max_output_tokens: 32000,
+    supports_prompt_caching: true
+  },
+  'claude-opus-4-6': {
+    input_cost_per_token: 0.000015,
+    output_cost_per_token: 0.000075,
+    cache_creation_input_token_cost: 0.00001875,
+    cache_read_input_token_cost: 0.0000015,
+    max_input_tokens: 200000,
+    max_output_tokens: 32000,
+    supports_prompt_caching: true
+  },
+  'claude-opus-4.6': {
+    input_cost_per_token: 0.000015,
+    output_cost_per_token: 0.000075,
+    cache_creation_input_token_cost: 0.00001875,
+    cache_read_input_token_cost: 0.0000015,
+    max_input_tokens: 200000,
+    max_output_tokens: 32000,
+    supports_prompt_caching: true
+  },
+
   // Claude Opus 4.5
   'claude-opus-4-5-20250929': {
     input_cost_per_token: 0.000015,
@@ -292,6 +321,7 @@ function getBaseModelName(series: string, version: string): string {
   // 映射到价格表中存在的基准模型名
   const modelMap: Record<string, Record<string, string>> = {
     'opus': {
+      '4.6': 'claude-opus-4-6',
       '4.5': 'claude-opus-4-5',
       '4': 'claude-opus-4',
       '3': 'claude-3-opus'
@@ -341,7 +371,7 @@ export function findModelPrice(model: string): ModelPriceInfo {
   // 5. 仅基于系列的匹配（使用该系列最新版本）
   if (series) {
     const seriesDefaults: Record<string, string> = {
-      'opus': 'claude-opus-4-5',
+      'opus': 'claude-opus-4-6',
       'sonnet': 'claude-sonnet-4-5',
       'haiku': 'claude-haiku-4-5'
     }

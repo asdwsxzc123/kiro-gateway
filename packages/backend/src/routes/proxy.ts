@@ -1,6 +1,6 @@
 /**
  * 代理路由
- * 提供 OpenAI/Claude 兼容的 API 端点
+ * 提供 Claude 兼容的 API 端点
  * 使用 ProxyServer 类处理请求
  */
 
@@ -8,7 +8,7 @@ import { Router, Request, Response } from 'express'
 import type { Router as IRouter } from 'express'
 import { createLogger } from '../utils/logger.js'
 import { ProxyServer } from '../core/proxyServer.js'
-import type { OpenAIChatRequest, ClaudeRequest } from '../core/types.js'
+import type { ClaudeRequest } from '../core/types.js'
 import * as accountStore from '../storage/accountStore.js'
 import * as configStore from '../storage/configStore.js'
 import { countAllTokens } from '../core/tokenCounter.js'
@@ -69,85 +69,6 @@ export async function refreshProxyServerAccounts(): Promise<void> {
     logger.info('ProxyServer accounts refreshed', { count: accounts.length })
   }
 }
-
-/**
- * OpenAI Chat Completions API
- * POST /v1/chat/completions
- */
-router.post('/chat/completions', async (req: Request, res: Response) => {
-  const request = req.body as OpenAIChatRequest
-
-  if (!request.messages || !Array.isArray(request.messages)) {
-    res.status(400).json({ error: { message: 'messages is required' } })
-    return
-  }
-
-  const isStream = request.stream === true
-
-  logger.info('OpenAI request received', {
-    model: request.model,
-    stream: isStream,
-    messagesCount: request.messages.length
-  })
-
-  try {
-    const server = await getProxyServer()
-
-    // 获取请求头
-    const headers: Record<string, string> = {}
-    if (req.headers['anthropic-beta']) {
-      headers['anthropic-beta'] = req.headers['anthropic-beta'] as string
-    }
-    if (req.headers['x-session-id']) {
-      headers['x-session-id'] = req.headers['x-session-id'] as string
-    }
-
-    if (isStream) {
-      // 流式响应
-      res.setHeader('Content-Type', 'text/event-stream')
-      res.setHeader('Cache-Control', 'no-cache')
-      res.setHeader('Connection', 'keep-alive')
-      res.setHeader('X-Accel-Buffering', 'no')
-
-      await server.handleOpenAIStreamRequest(
-        request,
-        {
-          onChunk: (chunk) => {
-            res.write(chunk)
-          },
-          onComplete: () => {
-            res.end()
-          },
-          onError: (error) => {
-            logger.error('Stream error', { error: error.message })
-            const errorChunk = JSON.stringify({
-              error: { message: error.message, type: 'api_error' }
-            })
-            res.write(`data: ${errorChunk}\n\n`)
-            res.end()
-          }
-        },
-        headers
-      )
-    } else {
-      // 非流式响应
-      const result = await server.handleOpenAIRequest(request, headers)
-
-      if (result.success && result.response) {
-        res.json(result.response)
-      } else {
-        res.status(500).json({
-          error: { message: result.error || 'Unknown error', type: 'api_error' }
-        })
-      }
-    }
-  } catch (error) {
-    logger.error('Request failed', { error: (error as Error).message })
-    res.status(500).json({
-      error: { message: (error as Error).message, type: 'api_error' }
-    })
-  }
-})
 
 /**
  * Claude Messages API
@@ -281,9 +202,8 @@ router.get('/models', (_req: Request, res: Response) => {
     { id: 'claude-sonnet-4.5', object: 'model', owned_by: 'kiro' },
     { id: 'claude-sonnet-4', object: 'model', owned_by: 'kiro' },
     { id: 'claude-haiku-4.5', object: 'model', owned_by: 'kiro' },
-    { id: 'claude-opus-4.5', object: 'model', owned_by: 'kiro' },
-    { id: 'gpt-4', object: 'model', owned_by: 'kiro' },
-    { id: 'gpt-4o', object: 'model', owned_by: 'kiro' }
+    { id: 'claude-opus-4.6', object: 'model', owned_by: 'kiro' },
+    { id: 'claude-opus-4.5', object: 'model', owned_by: 'kiro' }
   ]
 
   res.json({

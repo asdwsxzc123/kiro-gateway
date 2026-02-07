@@ -62,6 +62,9 @@ const MODEL_ID_MAP: Record<string, string> = {
   'claude-sonnet-4.5': 'claude-sonnet-4.5',
   'claude-haiku-4-5': 'claude-haiku-4.5',
   'claude-haiku-4.5': 'claude-haiku-4.5',
+  'claude-opus-4-6': 'claude-opus-4.6',
+  'claude-opus-4.6': 'claude-opus-4.6',
+  'claude-opus-4-6-20260207': 'claude-opus-4.6',
   'claude-opus-4-5': 'claude-opus-4.5',
   'claude-opus-4.5': 'claude-opus-4.5',
   'claude-sonnet-4': 'claude-sonnet-4',
@@ -70,10 +73,6 @@ const MODEL_ID_MAP: Record<string, string> = {
   'claude-3-opus': 'claude-sonnet-4.5',
   'claude-3-sonnet': 'claude-sonnet-4',
   'claude-3-haiku': 'claude-haiku-4.5',
-  'gpt-4': 'claude-sonnet-4.5',
-  'gpt-4o': 'claude-sonnet-4.5',
-  'gpt-4-turbo': 'claude-sonnet-4.5',
-  'gpt-3.5-turbo': 'claude-sonnet-4.5',
   'default': 'claude-sonnet-4.5'
 }
 
@@ -440,10 +439,7 @@ function getAuthHeaders(account: ProxyAccount, endpoint: typeof KIRO_ENDPOINTS[0
     headers['x-amzn-kiro-agent-mode'] = isIDC ? AGENT_MODE_VIBE : AGENT_MODE_SPEC
   }
 
-  // 携带账号绑定的机器码（作为单独的 header）
-  if (machineId) {
-    headers['x-amzn-device-id'] = machineId
-  }
+  // 注意：不添加 x-amzn-device-id header，machineId 已通过 User-Agent 传递（与 kiro-m 保持一致）
 
   return headers
 }
@@ -1022,9 +1018,7 @@ export async function fetchKiroModels(account: ProxyAccount): Promise<{
     'x-amzn-codewhisperer-optout': 'true'
   }
 
-  if (machineId) {
-    headers['x-amzn-device-id'] = machineId
-  }
+  // 注意：不添加 x-amzn-device-id header，machineId 已通过 User-Agent 传递（与 kiro-m 保持一致）
 
   try {
     const response = await fetch(url, { method: 'GET', headers })
@@ -1138,9 +1132,7 @@ export async function fetchUsageLimits(account: ProxyAccount): Promise<UsageLimi
     'x-amz-user-agent': getKiroAmzUserAgent(machineId)
   }
 
-  if (machineId) {
-    headers['x-amzn-device-id'] = machineId
-  }
+  // 注意：不添加 x-amzn-device-id header，machineId 已通过 User-Agent 传递（与 kiro-m 保持一致）
 
   logger.debug('Fetching usage limits', { accountId: account.id })
 
