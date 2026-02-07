@@ -74,6 +74,7 @@ router.get('/', async (_req: Request, res: Response) => {
 /**
  * 获取账号详情
  * GET /api/accounts/:id
+ * 注意：返回包含敏感字段（Token、Secret）的完整账号信息，方便编辑
  */
 router.get('/:id', async (req: Request, res: Response) => {
   try {
@@ -88,11 +89,15 @@ router.get('/:id', async (req: Request, res: Response) => {
       return
     }
 
-    // 隐藏敏感信息
-    const safeAccount = {
+    // 返回完整账号信息（包含敏感字段）
+    const fullAccount = {
       id: account.id,
       email: account.email,
       userId: account.userId,
+      accessToken: account.accessToken,
+      refreshToken: account.refreshToken,
+      clientId: account.clientId,
+      clientSecret: account.clientSecret,
       authMethod: account.authMethod,
       provider: account.provider,
       region: account.region,
@@ -108,7 +113,7 @@ router.get('/:id', async (req: Request, res: Response) => {
       createdAt: account.createdAt
     }
 
-    res.json({ success: true, data: safeAccount } as ApiResponse)
+    res.json({ success: true, data: fullAccount } as ApiResponse)
   } catch (error) {
     logger.error('Failed to get account', { error: (error as Error).message })
     res.status(500).json({
