@@ -38,7 +38,8 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { useToast } from "@/hooks/use-toast"
-import { getConfig, updateConfig, getApiKeys, createApiKey, deleteApiKey } from "@/api/config"
+import { getConfig, updateConfig, getApiKeys, createApiKey, updateApiKey, deleteApiKey } from "@/api/config"
+import { getAccounts } from "@/api/accounts"
 import { authApi } from "@/api/auth"
 import { getAllApiKeysTodayCost } from "@/api/stats"
 import type { ApiKeyCostData } from "@/api/stats"
@@ -52,6 +53,10 @@ export function Settings() {
   const queryClient = useQueryClient()
   const [isAddKeyDialogOpen, setIsAddKeyDialogOpen] = useState(false)
   const [newKeyName, setNewKeyName] = useState("")
+  const [newKeyBoundAccountIds, setNewKeyBoundAccountIds] = useState<string[]>([])
+  // 编辑绑定账号的对话框状态
+  const [editingKeyId, setEditingKeyId] = useState<string | null>(null)
+  const [editBoundAccountIds, setEditBoundAccountIds] = useState<string[]>([])
   const [sortBy, setSortBy] = useState<"name" | "todayCost" | "totalCost">("name")
   const [sortOrder, setSortOrder] = useState<"asc" | "desc">("asc")
 
@@ -80,6 +85,12 @@ export function Settings() {
     queryKey: ["apiKeysCostData"],
     queryFn: getAllApiKeysTodayCost,
     refetchInterval: 30 * 1000, // 30秒自动刷新
+  })
+
+  // 获取所有账号列表（用于 API Key 绑定账号选择）
+  const { data: accounts = [] } = useQuery({
+    queryKey: ["accounts"],
+    queryFn: getAccounts,
   })
 
   // 格式化费用显示
@@ -149,6 +160,7 @@ export function Settings() {
       queryClient.invalidateQueries({ queryKey: ["apiKeys"] })
       setIsAddKeyDialogOpen(false)
       setNewKeyName("")
+      setNewKeyBoundAccountIds([])
       // 显示新创建的 key
       toast({
         title: "创建成功",
@@ -158,6 +170,24 @@ export function Settings() {
     onError: (error: Error) => {
       toast({
         title: "创建失败",
+        description: error.message,
+        variant: "destructive",
+      })
+    },
+  })
+
+  // 更新 API Key 绑定账号
+  const updateKeyMutation = useMutation({
+    mutationFn: ({ id, data }: { id: string; data: { boundAccountIds: string[] } }) =>
+      updateApiKey(id, data),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["apiKeys"] })
+      setEditingKeyId(null)
+      toast({ title: "更新成功", description: "API Key 绑定账号已更新" })
+    },
+    onError: (error: Error) => {
+      toast({
+        title: "更新失败",
         description: error.message,
         variant: "destructive",
       })
@@ -360,16 +390,48 @@ export function Settings() {
                         onChange={(e) => setNewKeyName(e.target.value)}
                       />
                     </div>
+                    <div className="grid gap-2">
+                      <Label>绑定账号（可选）</Label>
+                      <p className="text-xs text-muted-foreground">
+                        不选择则使用全局账号池轮询
+                      </p>
+                      <div className="max-h-40 overflow-y-auto border rounded-md p-2 space-y-1">
+                        {accounts.length === 0 ? (
+                          <p className="text-sm text-muted-foreground">暂无账号</p>
+                        ) : (
+                          accounts.map((acc) => (
+                            <label key={acc.id} className="flex items-center gap-2 text-sm cursor-pointer hover:bg-muted rounded px-1 py-0.5">
+                              <input
+                                type="checkbox"
+                                checked={newKeyBoundAccountIds.includes(acc.id)}
+                                onChange={(e) => {
+                                  if (e.target.checked) {
+                                    setNewKeyBoundAccountIds([...newKeyBoundAccountIds, acc.id])
+                                  } else {
+                                    setNewKeyBoundAccountIds(newKeyBoundAccountIds.filter(id => id !== acc.id))
+                                  }
+                                }}
+                                className="rounded"
+                              />
+                              <span className="truncate">{acc.email || acc.id}</span>
+                            </label>
+                          ))
+                        )}
+                      </div>
+                    </div>
                   </div>
                   <DialogFooter>
                     <Button
                       variant="outline"
-                      onClick={() => setIsAddKeyDialogOpen(false)}
+                      onClick={() => { setIsAddKeyDialogOpen(false); setNewKeyBoundAccountIds([]) }}
                     >
                       取消
                     </Button>
                     <Button
-                      onClick={() => createKeyMutation.mutate({ name: newKeyName })}
+                      onClick={() => createKeyMutation.mutate({
+                        name: newKeyName,
+                        boundAccountIds: newKeyBoundAccountIds.length > 0 ? newKeyBoundAccountIds : undefined,
+                      })}
                       disabled={!newKeyName || createKeyMutation.isPending}
                     >
                       {createKeyMutation.isPending ? "创建中..." : "创建"}
@@ -386,6 +448,7 @@ export function Settings() {
                   暂无 API Key，点击上方按钮创建
                 </div>
               ) : (
+                <>
                 <Table>
                   <TableHeader>
                     <TableRow>
@@ -396,6 +459,7 @@ export function Settings() {
                         名称 <SortIndicator field="name" />
                       </TableHead>
                       <TableHead>Key 预览</TableHead>
+                      <TableHead>绑定账号</TableHead>
                       <TableHead>创建时间</TableHead>
                       <TableHead>最后使用</TableHead>
                       <TableHead
@@ -414,52 +478,135 @@ export function Settings() {
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {mergedApiKeys?.map((apiKey) => (
-                      <TableRow key={apiKey.id}>
-                        <TableCell className="font-medium">{apiKey.name}</TableCell>
-                        <TableCell className="font-mono">
-                          {apiKey.keyPreview || apiKey.key?.slice(0, 8) + "..."}
-                        </TableCell>
-                        <TableCell>{formatDate(apiKey.createdAt)}</TableCell>
-                        <TableCell>{formatDate(apiKey.lastUsed)}</TableCell>
-                        <TableCell className="font-semibold text-red-600">
-                          {apiKey.costData ? formatCost(apiKey.costData.todayCost) : "-"}
-                        </TableCell>
-                        <TableCell className="font-semibold text-orange-600">
-                          {apiKey.costData ? formatCost(apiKey.costData.totalCost) : "-"}
-                        </TableCell>
-                        <TableCell className="text-right">
-                          <div className="flex justify-end gap-2">
-                            {/* 复制完整 API Key */}
-                            {apiKey.key && (
+                    {mergedApiKeys?.map((apiKey) => {
+                      // 获取绑定账号的邮箱用于展示
+                      const boundIds = apiKey.boundAccountIds || []
+                      const boundEmails = boundIds
+                        .map(id => accounts.find(a => a.id === id)?.email || id.slice(0, 8))
+                        .join(', ')
+
+                      return (
+                        <TableRow key={apiKey.id}>
+                          <TableCell className="font-medium">{apiKey.name}</TableCell>
+                          <TableCell className="font-mono">
+                            {apiKey.keyPreview || apiKey.key?.slice(0, 8) + "..."}
+                          </TableCell>
+                          <TableCell className="max-w-[200px]">
+                            {boundIds.length > 0 ? (
+                              <span className="text-xs text-blue-600 truncate block" title={boundEmails}>
+                                {boundIds.length} 个账号
+                              </span>
+                            ) : (
+                              <span className="text-xs text-muted-foreground">全局</span>
+                            )}
+                          </TableCell>
+                          <TableCell>{formatDate(apiKey.createdAt)}</TableCell>
+                          <TableCell>{formatDate(apiKey.lastUsed)}</TableCell>
+                          <TableCell className="font-semibold text-red-600">
+                            {apiKey.costData ? formatCost(apiKey.costData.todayCost) : "-"}
+                          </TableCell>
+                          <TableCell className="font-semibold text-orange-600">
+                            {apiKey.costData ? formatCost(apiKey.costData.totalCost) : "-"}
+                          </TableCell>
+                          <TableCell className="text-right">
+                            <div className="flex justify-end gap-1">
+                              {/* 编辑绑定账号 */}
                               <Button
                                 variant="ghost"
                                 size="icon"
-                                onClick={() => copyApiKey(apiKey.key!)}
-                                title="复制完整 Key"
+                                onClick={() => {
+                                  setEditingKeyId(apiKey.id)
+                                  setEditBoundAccountIds(boundIds)
+                                }}
+                                title="编辑绑定账号"
                               >
-                                <Copy className="h-4 w-4" />
+                                <Save className="h-4 w-4" />
                               </Button>
-                            )}
-                            <Button
-                              variant="ghost"
-                              size="icon"
-                              onClick={() => {
-                                if (confirm("确定要删除此 API Key 吗？")) {
-                                  deleteKeyMutation.mutate(apiKey.id)
-                                }
-                              }}
-                              disabled={deleteKeyMutation.isPending}
-                              title="删除"
-                            >
-                              <Trash2 className="h-4 w-4 text-destructive" />
-                            </Button>
-                          </div>
-                        </TableCell>
-                      </TableRow>
-                    ))}
+                              {/* 复制完整 API Key */}
+                              {apiKey.key && (
+                                <Button
+                                  variant="ghost"
+                                  size="icon"
+                                  onClick={() => copyApiKey(apiKey.key!)}
+                                  title="复制完整 Key"
+                                >
+                                  <Copy className="h-4 w-4" />
+                                </Button>
+                              )}
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                onClick={() => {
+                                  if (confirm("确定要删除此 API Key 吗？")) {
+                                    deleteKeyMutation.mutate(apiKey.id)
+                                  }
+                                }}
+                                disabled={deleteKeyMutation.isPending}
+                                title="删除"
+                              >
+                                <Trash2 className="h-4 w-4 text-destructive" />
+                              </Button>
+                            </div>
+                          </TableCell>
+                        </TableRow>
+                      )
+                    })}
                   </TableBody>
                 </Table>
+
+                {/* 编辑绑定账号对话框 */}
+                <Dialog open={!!editingKeyId} onOpenChange={(open) => !open && setEditingKeyId(null)}>
+                  <DialogContent>
+                    <DialogHeader>
+                      <DialogTitle>编辑绑定账号</DialogTitle>
+                      <DialogDescription>
+                        选择此 API Key 可使用的账号，不选择则使用全局账号池
+                      </DialogDescription>
+                    </DialogHeader>
+                    <div className="max-h-60 overflow-y-auto border rounded-md p-2 space-y-1">
+                      {accounts.length === 0 ? (
+                        <p className="text-sm text-muted-foreground">暂无账号</p>
+                      ) : (
+                        accounts.map((acc) => (
+                          <label key={acc.id} className="flex items-center gap-2 text-sm cursor-pointer hover:bg-muted rounded px-1 py-0.5">
+                            <input
+                              type="checkbox"
+                              checked={editBoundAccountIds.includes(acc.id)}
+                              onChange={(e) => {
+                                if (e.target.checked) {
+                                  setEditBoundAccountIds([...editBoundAccountIds, acc.id])
+                                } else {
+                                  setEditBoundAccountIds(editBoundAccountIds.filter(id => id !== acc.id))
+                                }
+                              }}
+                              className="rounded"
+                            />
+                            <span className="truncate">{acc.email || acc.id}</span>
+                          </label>
+                        ))
+                      )}
+                    </div>
+                    <DialogFooter>
+                      <Button variant="outline" onClick={() => setEditingKeyId(null)}>
+                        取消
+                      </Button>
+                      <Button
+                        onClick={() => {
+                          if (editingKeyId) {
+                            updateKeyMutation.mutate({
+                              id: editingKeyId,
+                              data: { boundAccountIds: editBoundAccountIds },
+                            })
+                          }
+                        }}
+                        disabled={updateKeyMutation.isPending}
+                      >
+                        {updateKeyMutation.isPending ? "保存中..." : "保存"}
+                      </Button>
+                    </DialogFooter>
+                  </DialogContent>
+                </Dialog>
+                </>
               )}
             </CardContent>
           </Card>

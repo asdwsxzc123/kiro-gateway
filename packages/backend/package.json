@@ -23,6 +23,7 @@
     "express-rate-limit": "^7.5.0",
     "helmet": "^8.0.0",
     "ioredis": "^5.4.2",
+    "js-tiktoken": "^1.0.21",
     "jsonwebtoken": "^9.0.3",
     "rate-limit-redis": "^4.2.0",
     "uuid": "^11.0.5",

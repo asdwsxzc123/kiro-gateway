@@ -13,17 +13,34 @@ const logger = createLogger('LogsRoute')
 const router: IRouter = Router()
 
 /**
- * 获取请求日志
+ * 获取请求日志（支持分页和过滤）
  * GET /api/logs/requests
+ * @query limit - 每页数量，默认 20
+ * @query offset - 偏移量，默认 0
+ * @query startTime - 开始时间戳
+ * @query endTime - 结束时间戳
+ * @query model - 模型名称过滤
  */
 router.get('/requests', async (req: Request, res: Response) => {
   try {
-    const limit = parseInt(req.query.limit as string, 10) || 100
+    const limit = parseInt(req.query.limit as string, 10) || 20
+    const offset = parseInt(req.query.offset as string, 10) || 0
     const startTime = req.query.startTime ? parseInt(req.query.startTime as string, 10) : undefined
     const endTime = req.query.endTime ? parseInt(req.query.endTime as string, 10) : undefined
+    const model = req.query.model as string | undefined
 
-    const logs = await logService.getRequestLogs(limit, startTime, endTime)
-    res.json({ success: true, data: logs } as ApiResponse)
+    const result = await logService.getRequestLogs(limit, offset, startTime, endTime, model)
+
+    // 返回分页格式的响应
+    res.json({
+      success: true,
+      data: {
+        data: result.data,
+        total: result.total,
+        limit,
+        offset
+      }
+    } as ApiResponse)
   } catch (error) {
     logger.error('Failed to get request logs', { error: (error as Error).message })
     res.status(500).json({

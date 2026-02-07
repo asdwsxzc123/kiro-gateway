@@ -118,6 +118,9 @@ router.post('/messages', async (req: Request, res: Response) => {
       headers['x-session-id'] = req.headers['x-session-id'] as string
     }
 
+    // 从 API Key 记录中获取绑定的账号列表
+    const boundAccountIds = req.matchedApiKeyRecord?.boundAccountIds
+
     if (isStream) {
       // 流式响应
       res.setHeader('Content-Type', 'text/event-stream')
@@ -139,11 +142,13 @@ router.post('/messages', async (req: Request, res: Response) => {
             res.end()
           }
         },
-        headers
+        headers,
+        undefined,         // matchedApiKey
+        boundAccountIds    // 绑定的账号 ID 列表
       )
     } else {
       // 非流式响应
-      const result = await server.handleClaudeRequest(request, headers)
+      const result = await server.handleClaudeRequest(request, headers, boundAccountIds)
 
       if (result.success && result.response) {
         res.json(result.response)
@@ -199,6 +204,8 @@ router.post('/messages/count_tokens', async (req: Request, res: Response) => {
  */
 router.get('/models', (_req: Request, res: Response) => {
   const models = [
+    { id: 'claude-opus-4.6', object: 'model', owned_by: 'kiro' },
+    { id: 'claude-opus-4.6-1m', object: 'model', owned_by: 'kiro' },
     { id: 'claude-sonnet-4.5', object: 'model', owned_by: 'kiro' },
     { id: 'claude-sonnet-4', object: 'model', owned_by: 'kiro' },
     { id: 'claude-haiku-4.5', object: 'model', owned_by: 'kiro' },

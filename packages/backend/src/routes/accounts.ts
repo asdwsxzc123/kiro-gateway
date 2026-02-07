@@ -7,6 +7,7 @@ import { Router, Request, Response } from 'express'
 import type { Router as IRouter } from 'express'
 import { createLogger } from '../utils/logger.js'
 import * as accountService from '../services/accountService.js'
+import { refreshProxyServerAccounts } from './proxy.js'
 import type { AddAccountRequest, UpdateAccountRequest, ApiResponse } from '../core/types.js'
 
 const logger = createLogger('AccountsRoute')
@@ -208,6 +209,9 @@ router.delete('/:id', async (req: Request, res: Response) => {
       } as ApiResponse)
       return
     }
+
+    // 刷新 ProxyServer 内存中的账号池，移除已删除的账号
+    await refreshProxyServerAccounts()
 
     res.json({ success: true } as ApiResponse)
   } catch (error) {

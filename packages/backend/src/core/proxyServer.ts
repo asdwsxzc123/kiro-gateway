@@ -300,10 +300,24 @@ export class ProxyServer {
 
   // ============ 获取可用账号 ============
 
-  async getAvailableAccount(): Promise<ProxyAccount | null> {
-    const account = this.accountPool.getNextAccount()
+  /**
+   * 获取可用账号
+   * @param boundAccountIds 绑定的账号 ID 列表（API Key 维度），为空则使用全局轮询
+   */
+  async getAvailableAccount(boundAccountIds?: string[]): Promise<ProxyAccount | null> {
+    let account: ProxyAccount | null = null
+
+    // 如果指定了绑定账号，从子集中选择
+    if (boundAccountIds && boundAccountIds.length > 0) {
+      account = this.accountPool.getNextAccountFromSubset(boundAccountIds)
+    } else {
+      account = this.accountPool.getNextAccount()
+    }
+
     if (!account) {
-      logger.warn('No available accounts')
+      logger.warn('No available accounts', {
+        bound: boundAccountIds?.length ?? 0
+      })
       return null
     }
 
@@ -451,7 +465,8 @@ export class ProxyServer {
 
   async handleClaudeRequest(
     request: ClaudeRequest,
-    _headers?: Record<string, string>
+    _headers?: Record<string, string>,
+    boundAccountIds?: string[]
   ): Promise<{ success: boolean; response?: unknown; error?: string }> {
     this.recordNewRequest()
     this.events.onRequest?.({ path: '/v1/messages', method: 'POST' })
@@ -463,11 +478,15 @@ export class ProxyServer {
     if (sessionHash) {
       const stickyAccountId = await getSessionAccount(sessionHash)
       if (stickyAccountId) {
-        account = this.accountPool.getAccountIfAvailable(stickyAccountId)
+        // 如果 API Key 绑定了账号，sticky session 账号必须在绑定列表中
+        const inBoundList = !boundAccountIds || boundAccountIds.length === 0 || boundAccountIds.includes(stickyAccountId)
+        if (inBoundList) {
+          account = this.accountPool.getAccountIfAvailable(stickyAccountId)
+        }
       }
     }
     if (!account) {
-      account = await this.getAvailableAccount()
+      account = await this.getAvailableAccount(boundAccountIds)
     }
     if (!account) {
       this.recordRequestFailed()
@@ -606,15 +625,6 @@ export class ProxyServer {
         error: (error as Error).message
       })
 
-      this.recordRequest({
-        path: '/v1/messages',
-        model: request.model,
-        accountId: account.id,
-        responseTime: Date.now() - startTime,
-        success: false,
-        error: (error as Error).message
-      })
-
       return { success: false, error: (error as Error).message }
     }
   }
@@ -629,7 +639,8 @@ export class ProxyServer {
       onError: (error: Error) => void
     },
     headers?: Record<string, string>,
-    matchedApiKey?: ApiKey
+    matchedApiKey?: ApiKey,
+    boundAccountIds?: string[]
   ): Promise<void> {
     this.recordNewRequest()
     this.events.onRequest?.({ path: '/v1/messages', method: 'POST' })
@@ -641,11 +652,15 @@ export class ProxyServer {
     if (sessionHash) {
       const stickyAccountId = await getSessionAccount(sessionHash)
       if (stickyAccountId) {
-        account = this.accountPool.getAccountIfAvailable(stickyAccountId)
+        // 如果 API Key 绑定了账号，sticky session 账号必须在绑定列表中
+        const inBoundList = !boundAccountIds || boundAccountIds.length === 0 || boundAccountIds.includes(stickyAccountId)
+        if (inBoundList) {
+          account = this.accountPool.getAccountIfAvailable(stickyAccountId)
+        }
       }
     }
     if (!account) {
-      account = await this.getAvailableAccount()
+      account = await this.getAvailableAccount(boundAccountIds)
     }
     if (!account) {
       this.recordRequestFailed()
@@ -721,15 +736,6 @@ export class ProxyServer {
         error: (error as Error).message
       })
 
-      this.recordRequest({
-        path: '/v1/messages',
-        model: request.model,
-        accountId: account.id,
-        responseTime: Date.now() - startTime,
-        success: false,
-        error: (error as Error).message
-      })
-
       callbacks.onError(error as Error)
     }
   }
@@ -767,7 +773,7 @@ export class ProxyServer {
     let textBuffer = ''
     let inThinkingTagBlock = false
 
-    // 估算输入 tokens
+    // 估算输入 tokens（基于 payload 大小）
     const estimatedInputTokens = Math.max(1, Math.round(JSON.stringify(kiroPayload).length / 3))
 
     // 关闭 thinking 块的辅助函数
@@ -905,7 +911,12 @@ export class ProxyServer {
           model,
           stop_reason: null,
           stop_sequence: null,
-          usage: { input_tokens: estimatedInputTokens, output_tokens: 0 }
+          usage: {
+            input_tokens: estimatedInputTokens,
+            output_tokens: 0,
+            cache_creation_input_tokens: 0,
+            cache_read_input_tokens: 0
+          }
         }
       })
       callbacks.onChunk(`event: message_start\ndata: ${JSON.stringify(messageStart)}\n\n`)
@@ -1163,13 +1174,17 @@ export class ProxyServer {
             const cacheWriteTokens = cacheCalc?.cacheCreationTokens ?? (usage.cacheWriteTokens || 0)
             const cacheReadTokens = cacheCalc?.cacheReadTokens ?? (usage.cacheReadTokens || 0)
             const messageDelta = createClaudeStreamEvent('message_delta', {
-              delta: { type: 'message_delta', stop_reason: stopReason, stop_sequence: undefined },
+              delta: { stop_reason: stopReason, stop_sequence: null },
               usage: {
                 input_tokens: usage.inputTokens,
                 output_tokens: usage.outputTokens,
-                // 仅在有值时添加缓存字段，与非流式响应保持一致
-                ...(cacheWriteTokens ? { cache_creation_input_tokens: cacheWriteTokens } : {}),
-                ...(cacheReadTokens ? { cache_read_input_tokens: cacheReadTokens } : {})
+                cache_creation_input_tokens: cacheWriteTokens,
+                cache_read_input_tokens: cacheReadTokens,
+                // 上游 API 格式的详细 cache 信息
+                cache_creation: {
+                  ephemeral_1h_input_tokens: 0,  // Kiro API 暂不区分，全部计入 5m
+                  ephemeral_5m_input_tokens: cacheWriteTokens
+                }
               }
             })
             callbacks.onChunk(`event: message_delta\ndata: ${JSON.stringify(messageDelta)}\n\n`)

@@ -280,7 +280,7 @@ Client (OpenAI/Claude SDK)
 ## Deployment
 
 - **Docker**: Multi-stage build (Node 20-alpine), non-root user, health check
-- **Services**: Gateway (port 8000) + Redis 7 (port 16999)
+- **Services**: Gateway (port 8000) + Redis 7 (port 16379)
 - **Network**: `kiro-network` (Docker bridge)
 - **Redis Config**: 256MB max memory, LRU eviction
 - **Frontend**: Static files served by Express from `/public` in production
@@ -290,7 +290,7 @@ Client (OpenAI/Claude SDK)
 ```
 PORT=3000                    # Backend port
 HOST=0.0.0.0                # Bind address
-REDIS_URL=redis://localhost:16999
+REDIS_URL=redis://localhost:16379
 JWT_SECRET=...               # JWT signing secret
 JWT_EXPIRES_IN=24h
 ADMIN_USERNAME=admin

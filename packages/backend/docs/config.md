@@ -58,7 +58,7 @@ interface RedisConfig {
 
 | 环境变量 | 默认值 | 说明 |
 |---------|--------|------|
-| `REDIS_URL` | redis://localhost:16999 | Redis 连接地址 |
+| `REDIS_URL` | redis://localhost:16379 | Redis 连接地址 |
 | `REDIS_PASSWORD` | '' | Redis 密码 |
 | `REDIS_DB` | 0 | 数据库编号 |
 | `REDIS_KEY_PREFIX` | gateway: | 键前缀 |
@@ -216,7 +216,7 @@ import { getConfig } from './config/index'
 
 const config = getConfig()
 console.log(config.server.port)      // 3000
-console.log(config.redis.url)        // redis://localhost:16999
+console.log(config.redis.url)        // redis://localhost:16379
 ```
 
 ### 环境变量配置
@@ -224,7 +224,7 @@ console.log(config.redis.url)        // redis://localhost:16999
 ```bash
 # .env 文件
 PORT=8080
-REDIS_URL=redis://redis-server:16999
+REDIS_URL=redis://redis-server:16379
 MAX_CONCURRENT=20
 RATE_LIMIT_ENABLED=true
 ```

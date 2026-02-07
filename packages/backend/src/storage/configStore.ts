@@ -170,6 +170,7 @@ export interface ApiKeyRecord {
   id: string
   key: string
   name: string
+  boundAccountIds?: string[]  // 绑定的账号 ID 列表（空或不设 = 使用全局账号池）
   createdAt: number
   lastUsed?: number
 }
@@ -230,8 +231,9 @@ export async function deleteApiKey(id: string): Promise<boolean> {
 
 /**
  * 验证 API Key
+ * 返回匹配的 ApiKeyRecord（含 boundAccountIds），无匹配返回 null
  */
-export async function validateApiKey(key: string): Promise<boolean> {
+export async function validateApiKey(key: string): Promise<ApiKeyRecord | null> {
   const redis = getRedisClient()
 
   try {
@@ -240,7 +242,7 @@ export async function validateApiKey(key: string): Promise<boolean> {
     if (!data || Object.keys(data).length === 0) {
       // 没有配置任何 API Key，拒绝访问（更安全的默认行为）
       logger.warn('No API keys configured, access denied')
-      return false
+      return null
     }
 
     for (const json of Object.values(data)) {
@@ -249,13 +251,72 @@ export async function validateApiKey(key: string): Promise<boolean> {
         // 更新最后使用时间
         record.lastUsed = Date.now()
         await redis.hset(API_KEYS_KEY, record.id, JSON.stringify(record))
-        return true
+        return record
       }
     }
 
-    return false
+    return null
   } catch (error) {
     logger.error('Failed to validate API key', { error: (error as Error).message })
-    return false
+    return null
+  }
+}
+
+/**
+ * 更新 API Key（名称、绑定账号等）
+ */
+export async function updateApiKey(
+  id: string,
+  updates: Partial<Pick<ApiKeyRecord, 'name' | 'boundAccountIds'>>
+): Promise<ApiKeyRecord | null> {
+  const redis = getRedisClient()
+
+  try {
+    const raw = await redis.hget(API_KEYS_KEY, id)
+    if (!raw) return null
+
+    const record = JSON.parse(raw) as ApiKeyRecord
+    // 合并更新字段
+    if (updates.name !== undefined) record.name = updates.name
+    if (updates.boundAccountIds !== undefined) record.boundAccountIds = updates.boundAccountIds
+
+    await redis.hset(API_KEYS_KEY, id, JSON.stringify(record))
+    logger.info('API key updated', { id, updates })
+    return record
+  } catch (error) {
+    logger.error('Failed to update API key', { error: (error as Error).message })
+    return null
+  }
+}
+
+/**
+ * 从所有 API Key 的 boundAccountIds 中移除指定账号
+ * 用于账号删除时的级联清理
+ */
+export async function removeAccountFromApiKeys(accountId: string): Promise<number> {
+  const redis = getRedisClient()
+  let updated = 0
+
+  try {
+    const data = await redis.hgetall(API_KEYS_KEY)
+    if (!data || Object.keys(data).length === 0) return 0
+
+    for (const [id, json] of Object.entries(data)) {
+      const record = JSON.parse(json) as ApiKeyRecord
+      if (record.boundAccountIds && record.boundAccountIds.includes(accountId)) {
+        // 移除已删除的账号 ID
+        record.boundAccountIds = record.boundAccountIds.filter(aid => aid !== accountId)
+        await redis.hset(API_KEYS_KEY, id, JSON.stringify(record))
+        updated++
+      }
+    }
+
+    if (updated > 0) {
+      logger.info('Removed account from API key bindings', { accountId, updatedKeys: updated })
+    }
+    return updated
+  } catch (error) {
+    logger.error('Failed to remove account from API keys', { error: (error as Error).message })
+    return 0
   }
 }
