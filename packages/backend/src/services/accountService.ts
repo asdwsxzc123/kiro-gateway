@@ -271,7 +271,7 @@ export async function testAccountConnection(id: string): Promise<{
 
     // 发送请求并收集响应
     let responseContent = ''
-    let usage = { inputTokens: 0, outputTokens: 0, credits: 0 }
+    let usage = { outputTokens: 0, credits: 0 }
 
     await new Promise<void>((resolve, reject) => {
       callKiroApiStream(
@@ -295,7 +295,6 @@ export async function testAccountConnection(id: string): Promise<{
       id,
       model: selectedModel.modelId,
       responseLength: responseContent.length,
-      inputTokens: usage.inputTokens,
       outputTokens: usage.outputTokens
     })
 

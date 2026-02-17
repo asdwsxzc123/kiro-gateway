@@ -39,7 +39,7 @@ import { calculateCost } from './pricing.js'
 import { calculateCacheRatio, splitTokensByRatio } from './cacheTracker.js'
 import type { CacheRatio, CacheCalculation } from './cacheTracker.js'
 import { computeSessionHash, getSessionAccount, setSessionAccount } from './sessionCache.js'
-import { countAllTokens } from './tokenCounter.js'
+import { countTokens } from './tokenCounter.js'
 
 const logger = createLogger('ProxyServer')
 
@@ -395,6 +395,40 @@ export class ProxyServer {
     })
   }
 
+  private estimateKiroPayloadInputTokens(payload: KiroPayload): number {
+    const parts: string[] = []
+    const pushText = (value?: string) => {
+      if (value && value.trim()) parts.push(value)
+    }
+    const pushJson = (value: unknown) => {
+      if (value === undefined || value === null) return
+      parts.push(JSON.stringify(value))
+    }
+
+    const pushUserInput = (message?: { content?: string; modelId?: string; images?: unknown; userInputMessageContext?: { tools?: unknown; toolResults?: unknown } }) => {
+      if (!message) return
+      pushText(message.content)
+      pushText(message.modelId)
+      pushJson(message.images)
+      pushJson(message.userInputMessageContext?.tools)
+      pushJson(message.userInputMessageContext?.toolResults)
+    }
+
+    const current = payload.conversationState?.currentMessage?.userInputMessage
+    pushUserInput(current)
+
+    for (const historyMessage of payload.conversationState?.history || []) {
+      pushUserInput(historyMessage.userInputMessage)
+      if (historyMessage.assistantResponseMessage) {
+        pushText(historyMessage.assistantResponseMessage.content)
+        pushJson(historyMessage.assistantResponseMessage.toolUses)
+      }
+    }
+
+    if (parts.length === 0) return 1
+    return Math.max(1, countTokens(parts.join('\n')))
+  }
+
   // ============ 重试机制 ============
 
   private async callWithRetry<T>(
@@ -506,17 +540,24 @@ export class ProxyServer {
         '/v1/messages'
       )
 
-      // Split tokens by cache ratio
-      const cacheCalc = splitTokensByRatio(cacheRatio, result.usage.inputTokens)
+      // 非流式与流式统一口径：按实际发送的 Kiro payload 语义字段估算输入 token
+      const selfInputTokens = this.estimateKiroPayloadInputTokens(
+        claudeToKiro(request, usedAccount.profileArn)
+      )
+
+      // 用自计算的 input tokens 做 cache 拆分
+      const cacheCalc = splitTokensByRatio(cacheRatio, selfInputTokens)
       const uncachedInputTokens = cacheCalc.uncachedTokens
       const totalInputTokens = cacheCalc.totalInputTokens
+      // output tokens 由 kiroApi parseEventStream 自计算（tiktoken）
+      const outputTokens = result.usage.outputTokens
 
       const response = kiroToClaudeResponse(
         result.content,
         result.toolUses,
         {
-          ...result.usage,
           inputTokens: uncachedInputTokens,
+          outputTokens,
           cacheWriteTokens: cacheCalc.cacheCreationTokens,
           cacheReadTokens: cacheCalc.cacheReadTokens
         },
@@ -524,18 +565,18 @@ export class ProxyServer {
       )
 
       this.recordRequestSuccess()
-      this.stats.totalTokens += totalInputTokens + result.usage.outputTokens
+      this.stats.totalTokens += totalInputTokens + outputTokens
       this.stats.inputTokens += uncachedInputTokens
-      this.stats.outputTokens += result.usage.outputTokens
-      this.accountPool.recordSuccess(usedAccount.id, totalInputTokens + result.usage.outputTokens)
+      this.stats.outputTokens += outputTokens
+      this.accountPool.recordSuccess(usedAccount.id, totalInputTokens + outputTokens)
 
       this.events.onResponse?.({
         path: '/v1/messages',
         model: request.model,
         status: 200,
-        tokens: totalInputTokens + result.usage.outputTokens,
+        tokens: totalInputTokens + outputTokens,
         inputTokens: uncachedInputTokens,
-        outputTokens: result.usage.outputTokens
+        outputTokens
       })
 
       // Bind Sticky Session
@@ -547,7 +588,7 @@ export class ProxyServer {
       const cost2 = calculateCost(
         request.model,
         cacheCalc.totalInputTokens,
-        result.usage.outputTokens,
+        outputTokens,
         cacheCalc.cacheCreationTokens,
         cacheCalc.cacheReadTokens
       )
@@ -560,7 +601,7 @@ export class ProxyServer {
       statsStore.updateGlobalStats(
         true,
         uncachedInputTokens,
-        result.usage.outputTokens,
+        outputTokens,
         0,
         cost2.totalCost,
         cacheCalc.cacheCreationTokens,
@@ -577,7 +618,7 @@ export class ProxyServer {
         today,
         true,
         uncachedInputTokens,
-        result.usage.outputTokens,
+        outputTokens,
         0,
         cost2.totalCost,
         cacheCalc.cacheCreationTokens,
@@ -592,7 +633,7 @@ export class ProxyServer {
         today,
         true,
         uncachedInputTokens,
-        result.usage.outputTokens,
+        outputTokens,
         Date.now() - startTime,
         cost2.totalCost,
         cacheCalc.cacheCreationTokens,
@@ -606,7 +647,7 @@ export class ProxyServer {
         request.model,
         today,
         uncachedInputTokens,
-        result.usage.outputTokens,
+        outputTokens,
         cost2.totalCost
       ).catch(err => {
         logger.error('Failed to persist daily model stats', { error: (err as Error).message })
@@ -618,7 +659,7 @@ export class ProxyServer {
         accountId: usedAccount.id,
         machineId: usedAccount.machineId,
         inputTokens: cacheCalc.uncachedTokens,
-        outputTokens: result.usage.outputTokens,
+        outputTokens,
         cacheCreationTokens: cacheCalc.cacheCreationTokens,
         cacheReadTokens: cacheCalc.cacheReadTokens,
         cost: cost2.totalCost,
@@ -724,12 +765,7 @@ export class ProxyServer {
 
       // Calculate cache ratio before the API call
       const cacheRatio = await calculateCacheRatio(account.id, request)
-      const estimatedTotalInputTokens = countAllTokens(
-        request.model,
-        request.system,
-        request.messages,
-        request.tools
-      )
+      const estimatedTotalInputTokens = this.estimateKiroPayloadInputTokens(kiroPayload)
 
       await this.handleClaudeStream(
         callbacks,
@@ -794,8 +830,8 @@ export class ProxyServer {
     let textBuffer = ''
     let inThinkingTagBlock = false
 
-    // 估算输入 tokens（优先使用原始 Claude 请求估算，否则降级为 payload 大小估算）
-    const estimatedInputTokens = estimatedTotalInputTokens ?? Math.max(1, Math.round(JSON.stringify(kiroPayload).length / 3))
+    // 自计算输入 tokens（优先使用调用方已计算值，fallback 使用 Kiro payload 语义字段估算）
+    const estimatedInputTokens = estimatedTotalInputTokens ?? this.estimateKiroPayloadInputTokens(kiroPayload)
     const estimatedCacheCalc = cacheRatio ? splitTokensByRatio(cacheRatio, estimatedInputTokens) : null
 
     // 关闭 thinking 块的辅助函数
@@ -1010,24 +1046,27 @@ export class ProxyServer {
             currentBlockIndex++
           }
 
-          // Split tokens by cache ratio (only when ratio was calculated in first round)
+          // 自计算 token：input 使用预算值，output 由 kiroApi 自计算
+          const outputTokens = usage.outputTokens
+
+          // 用自计算的 input tokens 做 cache 拆分
           let cacheCalc: CacheCalculation | null = null
           if (cacheRatio) {
-            cacheCalc = splitTokensByRatio(cacheRatio, usage.inputTokens)
+            cacheCalc = splitTokensByRatio(cacheRatio, estimatedInputTokens)
             this.stats.cacheCreationTokens += cacheCalc.cacheCreationTokens
             this.stats.cacheReadTokens += cacheCalc.cacheReadTokens
           }
-          const cacheWriteTokens = cacheCalc?.cacheCreationTokens ?? (usage.cacheWriteTokens || 0)
-          const cacheReadTokens = cacheCalc?.cacheReadTokens ?? (usage.cacheReadTokens || 0)
-          const totalInputTokens = cacheCalc?.totalInputTokens ?? usage.inputTokens
-          const uncachedInputTokens = cacheCalc?.uncachedTokens ?? usage.inputTokens
+          const cacheWriteTokens = cacheCalc?.cacheCreationTokens ?? 0
+          const cacheReadTokens = cacheCalc?.cacheReadTokens ?? 0
+          const totalInputTokens = cacheCalc?.totalInputTokens ?? estimatedInputTokens
+          const uncachedInputTokens = cacheCalc?.uncachedTokens ?? estimatedInputTokens
 
           this.recordRequestSuccess()
-          this.stats.totalTokens += totalInputTokens + usage.outputTokens
+          this.stats.totalTokens += totalInputTokens + outputTokens
           this.stats.inputTokens += uncachedInputTokens
-          this.stats.outputTokens += usage.outputTokens
-          this.stats.totalCredits += usage.credits || 0
-          this.accountPool.recordSuccess(account.id, totalInputTokens + usage.outputTokens)
+          this.stats.outputTokens += outputTokens
+          this.stats.totalCredits += 0
+          this.accountPool.recordSuccess(account.id, totalInputTokens + outputTokens)
 
           // Bind Sticky Session
           if (sessionHash) {
@@ -1038,16 +1077,16 @@ export class ProxyServer {
             path: '/v1/messages',
             model,
             status: 200,
-            tokens: totalInputTokens + usage.outputTokens,
+            tokens: totalInputTokens + outputTokens,
             inputTokens: uncachedInputTokens,
-            outputTokens: usage.outputTokens,
-            credits: usage.credits
+            outputTokens,
+            credits: 0
           })
 
           const costStream2 = calculateCost(
             model,
             totalInputTokens,
-            usage.outputTokens,
+            outputTokens,
             cacheWriteTokens,
             cacheReadTokens
           )
@@ -1057,11 +1096,11 @@ export class ProxyServer {
             accountId: account.id,
             machineId: account.machineId,
             inputTokens: uncachedInputTokens,
-            outputTokens: usage.outputTokens,
+            outputTokens,
             cacheCreationTokens: cacheWriteTokens,
             cacheReadTokens,
             cost: costStream2.totalCost,
-            credits: usage.credits,
+            credits: 0,
             responseTime: Date.now() - startTime,
             success: true
           })
@@ -1069,8 +1108,8 @@ export class ProxyServer {
           statsStore.updateGlobalStats(
             true,
             uncachedInputTokens,
-            usage.outputTokens,
-            usage.credits || 0,
+            outputTokens,
+            0,
             costStream2.totalCost,
             cacheWriteTokens,
             cacheReadTokens
@@ -1086,8 +1125,8 @@ export class ProxyServer {
             today,
             true,
             uncachedInputTokens,
-            usage.outputTokens,
-            usage.credits || 0,
+            outputTokens,
+            0,
             costStream2.totalCost,
             cacheWriteTokens,
             cacheReadTokens
@@ -1101,7 +1140,7 @@ export class ProxyServer {
             today,
             true,
             uncachedInputTokens,
-            usage.outputTokens,
+            outputTokens,
             Date.now() - startTime,
             costStream2.totalCost,
             cacheWriteTokens,
@@ -1115,14 +1154,14 @@ export class ProxyServer {
             model,
             today,
             uncachedInputTokens,
-            usage.outputTokens,
+            outputTokens,
             costStream2.totalCost
           ).catch(err => {
             logger.error('Failed to persist daily model stats', { error: (err as Error).message })
           })
 
           if (matchedApiKey) {
-            this.recordApiKeyUsage(matchedApiKey.id, usage.credits || 0, uncachedInputTokens, usage.outputTokens, costStream2.totalCost, model, '/v1/messages')
+            this.recordApiKeyUsage(matchedApiKey.id, 0, uncachedInputTokens, outputTokens, costStream2.totalCost, model, '/v1/messages')
           }
 
           // 检查是否需要自动继续
@@ -1194,13 +1233,13 @@ export class ProxyServer {
             }
             resolve()
           } else {
-            // 发送 message_delta
+            // 发送 message_delta（全部使用自计算的 token 值）
             const stopReason = hasToolCalls ? 'tool_use' : 'end_turn'
             const messageDelta = createClaudeStreamEvent('message_delta', {
               delta: { stop_reason: stopReason, stop_sequence: null },
               usage: {
                 input_tokens: uncachedInputTokens,
-                output_tokens: usage.outputTokens,
+                output_tokens: outputTokens,
                 cache_creation_input_tokens: cacheWriteTokens,
                 cache_read_input_tokens: cacheReadTokens,
                 // 上游 API 格式的详细 cache 信息

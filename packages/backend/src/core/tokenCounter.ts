@@ -80,7 +80,7 @@ function getTokenEncoder(): Tiktoken | null {
  * @param applyCorrection - 是否应用 Claude 修正系数（默认 true）
  * @returns token 数量
  */
-function countTokens(text: string, applyCorrection = true): number {
+export function countTokens(text: string, applyCorrection = true): number {
   if (!text) return 0
 
   const encoder = getTokenEncoder()
