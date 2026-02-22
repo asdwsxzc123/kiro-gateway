@@ -389,12 +389,18 @@ export interface RequestLog {
   inputTokens: number
   outputTokens: number
   credits?: number
+  /** Kiro 上游实际消耗的积分（来自 meteringEvent） */
+  kiroCredits?: number
   cacheCreationTokens?: number
   cacheReadTokens?: number
   cost?: number
   responseTime: number
   success: boolean
   error?: string
+  /** 辅助请求标记（主题检测、自动建议等），不计入计费统计 */
+  auxiliary?: boolean
+  /** 用户实际输入的文本内容（截断保存，方便排查） */
+  userInput?: string
 }
 
 export interface SystemLog {

@@ -37,7 +37,7 @@ import * as accountStore from '../storage/accountStore.js'
 import * as dailyStatsStore from '../storage/dailyStatsStore.js'
 import * as apiKeyStore from '../storage/apiKeyStore.js'
 import { calculateCost } from './pricing.js'
-import { calculateCacheRatio, splitTokensByRatio, estimateUserOnlyTokens, estimateRequestWeight } from './cacheTracker.js'
+import { calculateCacheRatio, splitTokensByRatio, estimateUserOnlyTokens, estimateRequestWeight, extractUserInputText } from './cacheTracker.js'
 import type { CacheRatio, CacheCalculation } from './cacheTracker.js'
 import { computeSessionHash, getSessionAccount, setSessionAccount } from './sessionCache.js'
 
@@ -379,12 +379,15 @@ export class ProxyServer {
       inputTokens: log.inputTokens || 0,
       outputTokens: log.outputTokens || 0,
       credits: log.credits,
+      kiroCredits: log.kiroCredits,
       cacheCreationTokens: log.cacheCreationTokens,
       cacheReadTokens: log.cacheReadTokens,
       cost: log.cost,
       responseTime: log.responseTime || 0,
       success: log.success ?? true,
-      error: log.error
+      error: log.error,
+      auxiliary: log.auxiliary,
+      userInput: log.userInput
     }
 
     this.stats.recentRequests.unshift(requestLog)
@@ -401,27 +404,11 @@ export class ProxyServer {
   }
 
   /**
-   * 检测辅助请求（不计费）
-   * - 主题检测：haiku 模型且无工具定义
-   * - 自动建议/补全：用户输入为空（所有内容均在缓存中）且有历史消息
+   * 检测主题检测请求（haiku + 无工具 = Claude Code 生成对话标题）
+   * 这类请求完全跳过：不计费、不记录日志
    */
-  private isAuxiliaryRequest(request: ClaudeRequest, userOnlyTokens: number): boolean {
-    // 主题检测：轻量模型无工具且用户输入极少（≤1 token）
-    if ((!request.tools || request.tools.length === 0) && /haiku/i.test(request.model) && userOnlyTokens <= 1) {
-      return true
-    }
-    // 自动建议/补全：存在历史对话且最后一条 user 消息全部带 cache_control（系统生成的提示词）
-    // 且用户实际输入极少（≤10 token）
-    if (request.messages.length > 1 && userOnlyTokens <= 10) {
-      const lastUserMsg = [...request.messages].reverse().find(m => m.role === 'user')
-      if (lastUserMsg && Array.isArray(lastUserMsg.content)) {
-        const hasNonCachedText = lastUserMsg.content.some(
-          b => b.type === 'text' && b.text && !b.cache_control
-        )
-        if (!hasNonCachedText) return true
-      }
-    }
-    return false
+  private isTopicDetection(request: ClaudeRequest): boolean {
+    return (!request.tools || request.tools.length === 0) && /haiku/i.test(request.model)
   }
 
   /**
@@ -592,8 +579,10 @@ export class ProxyServer {
       // Deterministic user-only tokens (no Redis dependency)
       const userOnlyTokens = estimateUserOnlyTokens(effectiveRequest)
 
-      // 检测辅助请求（主题检测、自动建议），跳过计费
-      const skipBilling = this.isAuxiliaryRequest(effectiveRequest, userOnlyTokens)
+      // 检测主题检测（haiku 无 tools）：完全跳过计费和日志
+      const topicDetection = this.isTopicDetection(effectiveRequest)
+      // 仅主题检测（haiku 无 tools）跳过计费和日志
+      const skipBilling = topicDetection
 
       // 用自计算的 input tokens 做 cache 拆分
       const cacheCalc = splitTokensByRatio(cacheRatio, selfInputTokens)
@@ -622,6 +611,7 @@ export class ProxyServer {
       })
       // output tokens 由 kiroApi parseEventStream 自计算（tiktoken）
       const outputTokens = result.usage.outputTokens
+      const kiroCredits = result.usage.kiroCredits
 
       const response = kiroToClaudeResponse(
         result.content,
@@ -635,36 +625,61 @@ export class ProxyServer {
         effectiveRequest.model
       )
 
-      // 辅助请求跳过所有计费和统计
+      // 辅助请求：记录日志但跳过计费统计
+      this.recordRequestSuccess()
+      this.accountPool.recordSuccess(usedAccount.id, totalInputTokens + outputTokens)
+
+      this.events.onResponse?.({
+        path: '/v1/messages',
+        model: effectiveRequest.model,
+        status: 200,
+        tokens: totalInputTokens + outputTokens,
+        inputTokens: uncachedInputTokens,
+        outputTokens
+      })
+
+      // Bind Sticky Session
+      if (sessionHash) {
+        setSessionAccount(sessionHash, usedAccount.id).catch(() => {})
+      }
+
+      // Cache-aware cost calculation（辅助请求 cost=0）
+      const cost2 = skipBilling ? { totalCost: 0 } : calculateCost(
+        effectiveRequest.model,
+        totalInputTokens,
+        outputTokens,
+        cacheWriteTokens,
+        cacheReadTokens
+      )
+
+      // 提取用户输入内容
+      const userInput = extractUserInputText(effectiveRequest)
+
+      // 主题检测请求不记录日志；其他辅助请求带 auxiliary 标记
+      if (!topicDetection) {
+        this.recordRequest({
+          path: '/v1/messages',
+          model: effectiveRequest.model,
+          accountId: usedAccount.id,
+          machineId: usedAccount.machineId,
+          inputTokens: uncachedInputTokens,
+          outputTokens,
+          kiroCredits,
+          cacheCreationTokens: cacheWriteTokens,
+          cacheReadTokens,
+          cost: cost2.totalCost,
+          responseTime: Date.now() - startTime,
+          success: true,
+          auxiliary: false,
+          userInput
+        })
+      }
+
+      // 仅非辅助请求更新计费统计
       if (!skipBilling) {
-        this.recordRequestSuccess()
         this.stats.totalTokens += totalInputTokens + outputTokens
         this.stats.inputTokens += uncachedInputTokens
         this.stats.outputTokens += outputTokens
-        this.accountPool.recordSuccess(usedAccount.id, totalInputTokens + outputTokens)
-
-        this.events.onResponse?.({
-          path: '/v1/messages',
-          model: effectiveRequest.model,
-          status: 200,
-          tokens: totalInputTokens + outputTokens,
-          inputTokens: uncachedInputTokens,
-          outputTokens
-        })
-
-        // Bind Sticky Session
-        if (sessionHash) {
-          setSessionAccount(sessionHash, usedAccount.id).catch(() => {})
-        }
-
-        // Cache-aware cost calculation
-        const cost2 = calculateCost(
-          effectiveRequest.model,
-          totalInputTokens,
-          outputTokens,
-          cacheWriteTokens,
-          cacheReadTokens
-        )
 
         // Update memory stats
         this.stats.cacheCreationTokens += cacheWriteTokens
@@ -724,20 +739,6 @@ export class ProxyServer {
           cost2.totalCost
         ).catch(err => {
           logger.error('Failed to persist daily model stats', { error: (err as Error).message })
-        })
-
-        this.recordRequest({
-          path: '/v1/messages',
-          model: effectiveRequest.model,
-          accountId: usedAccount.id,
-          machineId: usedAccount.machineId,
-          inputTokens: uncachedInputTokens,
-          outputTokens,
-          cacheCreationTokens: cacheWriteTokens,
-          cacheReadTokens,
-          cost: cost2.totalCost,
-          responseTime: Date.now() - startTime,
-          success: true
         })
       }
 
@@ -848,12 +849,17 @@ export class ProxyServer {
       const estimatedTotalInputTokens = estimateRequestWeight(effectiveRequest)
       // Deterministic user-only tokens (no Redis dependency)
       const userOnlyTokens = estimateUserOnlyTokens(effectiveRequest)
+      // 提取用户输入内容
+      const userInput = extractUserInputText(effectiveRequest)
 
-      // 检测辅助请求（主题检测、自动建议），跳过计费
-      const skipBilling = this.isAuxiliaryRequest(effectiveRequest, userOnlyTokens)
+      // 检测主题检测（haiku 无 tools）：完全跳过计费和日志
+      const topicDetection = this.isTopicDetection(effectiveRequest)
+      // 仅主题检测（haiku 无 tools）跳过计费和日志
+      const skipBilling = topicDetection
       if (skipBilling) {
         logger.info('Auxiliary request detected, skipping billing', {
           model: effectiveRequest.model,
+          topicDetection,
           messagesCount: effectiveRequest.messages.length,
           toolsCount: effectiveRequest.tools?.length || 0,
           userOnlyTokens
@@ -903,7 +909,9 @@ export class ProxyServer {
         sessionHash,
         estimatedTotalInputTokens,
         userOnlyTokens,
-        skipBilling
+        skipBilling,
+        userInput,
+        topicDetection
       )
 
       callbacks.onComplete()
@@ -938,8 +946,10 @@ export class ProxyServer {
     cacheRatio?: CacheRatio | null,
     sessionHash?: string | null,
     estimatedTotalInputTokens?: number,
-    userOnlyTokens?: number,
-    skipBilling?: boolean
+    userOnlyTokens?: number | null,
+    skipBilling?: boolean,
+    userInput?: string,
+    skipRecording?: boolean
   ): Promise<void> {
     const id = msgId || `msg_${uuidv4()}`
     let currentBlockIndex = contentBlockIndex
@@ -1180,6 +1190,7 @@ export class ProxyServer {
 
           // 自计算 token：input 使用预算值，output 由 kiroApi 自计算
           const outputTokens = usage.outputTokens
+          const kiroCredits = usage.kiroCredits
 
           // 用自计算的 input tokens 做 cache 拆分
           let cacheCalc: CacheCalculation | null = null
@@ -1204,37 +1215,35 @@ export class ProxyServer {
             source: userOnlyTokens != null ? 'userOnlyTokens' : cacheCalc ? 'cacheCalc.uncachedTokens' : 'estimatedInputTokens'
           })
 
-          // 辅助请求（主题检测、自动建议）跳过所有计费和统计
-          if (!skipBilling) {
-            this.recordRequestSuccess()
-            this.stats.totalTokens += totalInputTokens + outputTokens
-            this.stats.inputTokens += uncachedInputTokens
-            this.stats.outputTokens += outputTokens
-            this.stats.totalCredits += 0
-            this.accountPool.recordSuccess(account.id, totalInputTokens + outputTokens)
+          // 辅助请求（主题检测、自动建议）：记录日志但跳过计费统计
+          this.recordRequestSuccess()
+          this.accountPool.recordSuccess(account.id, totalInputTokens + outputTokens)
 
-            // Bind Sticky Session
-            if (sessionHash) {
-              setSessionAccount(sessionHash, account.id).catch(() => {})
-            }
+          // Bind Sticky Session
+          if (sessionHash) {
+            setSessionAccount(sessionHash, account.id).catch(() => {})
+          }
 
-            this.events.onResponse?.({
-              path: '/v1/messages',
-              model,
-              status: 200,
-              tokens: totalInputTokens + outputTokens,
-              inputTokens: uncachedInputTokens,
-              outputTokens,
-              credits: 0
-            })
+          this.events.onResponse?.({
+            path: '/v1/messages',
+            model,
+            status: 200,
+            tokens: totalInputTokens + outputTokens,
+            inputTokens: uncachedInputTokens,
+            outputTokens,
+            credits: 0
+          })
 
-            const costStream2 = calculateCost(
-              model,
-              totalInputTokens,
-              outputTokens,
-              cacheWriteTokens,
-              cacheReadTokens
-            )
+          const costStream2 = skipBilling ? { totalCost: 0 } : calculateCost(
+            model,
+            totalInputTokens,
+            outputTokens,
+            cacheWriteTokens,
+            cacheReadTokens
+          )
+
+          // 主题检测请求不记录日志；其他辅助请求带 auxiliary 标记
+          if (!skipRecording) {
             this.recordRequest({
               path: '/v1/messages',
               model,
@@ -1242,13 +1251,24 @@ export class ProxyServer {
               machineId: account.machineId,
               inputTokens: uncachedInputTokens,
               outputTokens,
+              kiroCredits,
               cacheCreationTokens: cacheWriteTokens,
               cacheReadTokens,
               cost: costStream2.totalCost,
               credits: 0,
               responseTime: Date.now() - startTime,
-              success: true
+              success: true,
+              auxiliary: false,
+              userInput
             })
+          }
+
+          // 仅非辅助请求更新计费统计
+          if (!skipBilling) {
+            this.stats.totalTokens += totalInputTokens + outputTokens
+            this.stats.inputTokens += uncachedInputTokens
+            this.stats.outputTokens += outputTokens
+            this.stats.totalCredits += 0
 
             statsStore.updateGlobalStats(
               true,
@@ -1375,7 +1395,9 @@ export class ProxyServer {
                 sessionHash,   // keep session hash for binding
                 undefined,     // estimatedTotalInputTokens
                 undefined,     // userOnlyTokens
-                skipBilling    // preserve billing flag
+                skipBilling,   // preserve billing flag
+                userInput,     // preserve user input
+                skipRecording  // preserve recording flag
               )
             } catch (error) {
               logger.error('Claude auto-continue error', { error: (error as Error).message })

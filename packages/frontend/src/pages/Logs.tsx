@@ -363,8 +363,10 @@ export function Logs() {
                     <TableHead className="text-right">缓存读</TableHead>
                     <TableHead className="text-right">缓存建</TableHead>
                     <TableHead className="text-right">费用($)</TableHead>
-                    <TableHead>消费类型</TableHead>
+                    <TableHead className="text-right">积分</TableHead>
+                    <TableHead>类型</TableHead>
                     <TableHead className="text-right">耗时</TableHead>
+                    <TableHead>用户输入</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -379,18 +381,26 @@ export function Logs() {
                       <TableCell className="text-right">{(log.cacheReadTokens ?? 0).toLocaleString()}</TableCell>
                       <TableCell className="text-right">{(log.cacheCreationTokens ?? 0).toLocaleString()}</TableCell>
                       <TableCell className="text-right whitespace-nowrap">{formatCost(log.cost)}</TableCell>
+                      <TableCell className="text-right">{log.kiroCredits ?? "-"}</TableCell>
                       <TableCell>
-                        <span
-                          className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${
-                            log.success
-                              ? "bg-green-100 text-green-700"
-                              : "bg-red-100 text-red-700"
-                          }`}
-                        >
-                          {log.success ? "正常" : "失败"}
-                        </span>
+                        {log.auxiliary ? (
+                          <span className="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium bg-gray-100 text-gray-600">
+                            辅助
+                          </span>
+                        ) : log.success ? (
+                          <span className="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium bg-green-100 text-green-700">
+                            正常
+                          </span>
+                        ) : (
+                          <span className="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium bg-red-100 text-red-700">
+                            失败
+                          </span>
+                        )}
                       </TableCell>
                       <TableCell className="text-right">{log.responseTime}ms</TableCell>
+                      <TableCell className="max-w-[150px] truncate text-xs text-muted-foreground" title={log.userInput || ""}>
+                        {log.userInput || "-"}
+                      </TableCell>
                     </TableRow>
                   ))}
                 </TableBody>
