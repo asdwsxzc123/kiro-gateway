@@ -21,6 +21,9 @@ importers:
       standard-version:
         specifier: ^9.5.0
         version: 9.5.0
+      tsx:
+        specifier: ^4.19.2
+        version: 4.21.0
 
   packages/backend:
     dependencies:

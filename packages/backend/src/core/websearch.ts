@@ -146,7 +146,8 @@ async function callMcpApi(
   mcpRequest: McpRequest
 ): Promise<WebSearchResults | null> {
   const machineId = account.machineId
-  const url = 'https://q.us-east-1.amazonaws.com/mcp'
+  const region = account.region || 'us-east-1'
+  const url = `https://q.${region}.amazonaws.com/mcp`
 
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',

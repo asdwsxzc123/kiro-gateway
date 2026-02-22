@@ -20,20 +20,25 @@ import { countTokens } from './tokenCounter.js'
 const logger = createLogger('KiroAPI')
 
 // Kiro API 端点配置
-export const KIRO_ENDPOINTS = [
-  {
-    url: 'https://codewhisperer.us-east-1.amazonaws.com/generateAssistantResponse',
-    origin: 'AI_EDITOR',
-    amzTarget: 'AmazonCodeWhispererStreamingService.GenerateAssistantResponse',
-    name: 'CodeWhisperer'
-  },
-  {
-    url: 'https://q.us-east-1.amazonaws.com/generateAssistantResponse',
-    origin: 'CLI',
-    amzTarget: 'AmazonQDeveloperStreamingService.SendMessage',
-    name: 'AmazonQ'
-  }
-]
+export function getKiroEndpoints(region: string = 'us-east-1') {
+  return [
+    {
+      url: `https://codewhisperer.${region}.amazonaws.com/generateAssistantResponse`,
+      origin: 'AI_EDITOR',
+      amzTarget: 'AmazonCodeWhispererStreamingService.GenerateAssistantResponse',
+      name: 'CodeWhisperer'
+    },
+    {
+      url: `https://q.${region}.amazonaws.com/generateAssistantResponse`,
+      origin: 'CLI',
+      amzTarget: 'AmazonQDeveloperStreamingService.SendMessage',
+      name: 'AmazonQ'
+    }
+  ]
+}
+
+// 保留默认端点常量，兼容外部引用
+export const KIRO_ENDPOINTS = getKiroEndpoints()
 
 // Kiro 版本
 const KIRO_VERSION = '0.6.18'
@@ -449,10 +454,11 @@ function getAuthHeaders(account: ProxyAccount, endpoint: typeof KIRO_ENDPOINTS[0
 /**
  * 获取排序后的端点列表
  */
-function getSortedEndpoints(preferredEndpoint?: 'codewhisperer' | 'amazonq'): typeof KIRO_ENDPOINTS {
-  if (!preferredEndpoint) return [...KIRO_ENDPOINTS]
+function getSortedEndpoints(preferredEndpoint?: 'codewhisperer' | 'amazonq', region?: string): typeof KIRO_ENDPOINTS {
+  const endpoints = region ? getKiroEndpoints(region) : [...KIRO_ENDPOINTS]
+  if (!preferredEndpoint) return endpoints
 
-  const sorted = [...KIRO_ENDPOINTS]
+  const sorted = [...endpoints]
   const preferredName = preferredEndpoint === 'codewhisperer' ? 'CodeWhisperer' : 'AmazonQ'
 
   sorted.sort((a, b) => {
@@ -892,7 +898,7 @@ export async function callKiroApiStream(
   preferredEndpoint?: 'codewhisperer' | 'amazonq',
   skipAgentMode = false
 ): Promise<void> {
-  const endpoints = getSortedEndpoints(preferredEndpoint)
+  const endpoints = getSortedEndpoints(preferredEndpoint, account.region)
   let lastError: Error | null = null
 
   for (const endpoint of endpoints) {
@@ -962,7 +968,8 @@ export async function callKiroApiStream(
 export async function callKiroApi(
   account: ProxyAccount,
   payload: KiroPayload,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  preferredEndpoint?: 'codewhisperer' | 'amazonq'
 ): Promise<{
   content: string
   toolUses: KiroToolUse[]
@@ -997,7 +1004,8 @@ export async function callKiroApi(
         })
       },
       reject,
-      signal
+      signal,
+      preferredEndpoint
     )
   })
 }
@@ -1010,7 +1018,8 @@ export async function fetchKiroModels(account: ProxyAccount): Promise<{
   modelName: string
   description: string
 }[]> {
-  const url = 'https://codewhisperer.us-east-1.amazonaws.com/ListAvailableModels?origin=AI_EDITOR&maxResults=50'
+  const region = account.region || 'us-east-1'
+  const url = `https://codewhisperer.${region}.amazonaws.com/ListAvailableModels?origin=AI_EDITOR&maxResults=50`
   const machineId = account.machineId
 
   const headers: Record<string, string> = {
@@ -1126,7 +1135,8 @@ export async function fetchUsageLimits(account: ProxyAccount): Promise<UsageLimi
     params.set('profileArn', account.profileArn)
   }
 
-  const url = `https://q.us-east-1.amazonaws.com/getUsageLimits?${params.toString()}`
+  const region = account.region || 'us-east-1'
+  const url = `https://q.${region}.amazonaws.com/getUsageLimits?${params.toString()}`
   const machineId = account.machineId
 
   const headers: Record<string, string> = {

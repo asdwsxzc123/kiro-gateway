@@ -1,6 +1,6 @@
 {
   "name": "kiro-gateway-monorepo",
-  "version": "1.4.0",
+  "version": "1.4.1",
   "private": true,
   "description": "Kiro API Gateway Monorepo",
   "scripts": {
@@ -23,6 +23,7 @@
   },
   "devDependencies": {
     "standard-changelog": "^7.0.1",
-    "standard-version": "^9.5.0"
+    "standard-version": "^9.5.0",
+    "tsx": "^4.19.2"
   }
 }

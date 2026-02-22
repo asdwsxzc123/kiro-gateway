@@ -25,6 +25,12 @@ export interface GatewayConfig {
   retryDelay: number
   requestTimeout: number
   preferredEndpoint?: 'codewhisperer' | 'amazonq'
+  defaultRegion?: string
+  disableTools?: boolean
+  disableToolCalls?: boolean
+  autoContinueRounds?: number
+  toolCallAutoRounds?: number
+  autoSwitchOnQuotaExhausted?: boolean
 
   // 限流配置
   rateLimitEnabled: boolean
@@ -40,6 +46,10 @@ const DEFAULT_CONFIG: GatewayConfig = {
   maxRetries: 3,
   retryDelay: 1000,
   requestTimeout: 120000,
+  defaultRegion: 'us-east-1',
+  disableTools: false,
+  autoContinueRounds: 0,
+  autoSwitchOnQuotaExhausted: true,
   rateLimitEnabled: false,
   rateLimitWindow: 60000,
   rateLimitMax: 100
@@ -58,6 +68,15 @@ export async function getGatewayConfig(): Promise<GatewayConfig> {
       return { ...DEFAULT_CONFIG }
     }
 
+    const disableTools = data.disableTools === 'true' || data.disableToolCalls === 'true'
+    const autoContinueRoundsRaw = data.autoContinueRounds ?? data.toolCallAutoRounds
+    const autoContinueRounds = autoContinueRoundsRaw !== undefined
+      ? (parseInt(autoContinueRoundsRaw, 10) || 0)
+      : (DEFAULT_CONFIG.autoContinueRounds || 0)
+    const autoSwitchOnQuotaExhausted = data.autoSwitchOnQuotaExhausted !== undefined
+      ? data.autoSwitchOnQuotaExhausted === 'true'
+      : (DEFAULT_CONFIG.autoSwitchOnQuotaExhausted ?? true)
+
     return {
       port: parseInt(data.port, 10) || DEFAULT_CONFIG.port,
       host: data.host || DEFAULT_CONFIG.host,
@@ -67,6 +86,12 @@ export async function getGatewayConfig(): Promise<GatewayConfig> {
       retryDelay: parseInt(data.retryDelay, 10) || DEFAULT_CONFIG.retryDelay,
       requestTimeout: parseInt(data.requestTimeout, 10) || DEFAULT_CONFIG.requestTimeout,
       preferredEndpoint: data.preferredEndpoint as GatewayConfig['preferredEndpoint'],
+      defaultRegion: data.defaultRegion || DEFAULT_CONFIG.defaultRegion,
+      disableTools,
+      disableToolCalls: disableTools,
+      autoContinueRounds,
+      toolCallAutoRounds: autoContinueRounds,
+      autoSwitchOnQuotaExhausted,
       rateLimitEnabled: data.rateLimitEnabled === 'true',
       rateLimitWindow: parseInt(data.rateLimitWindow, 10) || DEFAULT_CONFIG.rateLimitWindow,
       rateLimitMax: parseInt(data.rateLimitMax, 10) || DEFAULT_CONFIG.rateLimitMax,

@@ -3,6 +3,8 @@
  * 基于原有 proxy/types.ts 迁移并扩展
  */
 
+import type { AccountStatus } from '@kiro-gateway/shared'
+
 // ============ Claude 兼容格式 ============
 
 export interface ClaudeThinkingConfig {
@@ -193,7 +195,7 @@ export interface ProxyAccount {
   lastUsed?: number
   requestCount?: number
   errorCount?: number
-  status?: 'active' | 'paused' | 'error_suspended'  // 调度状态，默认 active
+  status?: AccountStatus  // 调度状态，默认 active
   cooldownUntil?: number
   createdAt?: number
 }
@@ -225,7 +227,7 @@ export interface UpdateAccountRequest {
   provider?: string
   profileArn?: string
   machineId?: string
-  status?: 'active' | 'paused' | 'error_suspended'
+  status?: AccountStatus
   expiresAt?: number
 }
 
@@ -278,6 +280,9 @@ export interface ProxyConfig {
 
   // 端点偏好
   preferredEndpoint?: 'codewhisperer' | 'amazonq'
+
+  // 默认 Region
+  defaultRegion?: string
 }
 
 // API Key 定义（带用量统计）

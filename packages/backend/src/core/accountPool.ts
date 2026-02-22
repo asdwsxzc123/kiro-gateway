@@ -5,8 +5,9 @@
  */
 
 import type { ProxyAccount } from './types.js'
+import type { AccountStatus } from '@kiro-gateway/shared'
 
-export type AccountStatus = 'active' | 'paused' | 'error_suspended'
+export type { AccountStatus }
 
 export interface AccountPoolStats {
   id: string
@@ -191,7 +192,7 @@ export class AccountPool {
     if (account) {
       account.lastUsed = Date.now()
       account.requestCount = (account.requestCount || 0) + 1
-      // 仅从 error_suspended 自动恢复，手动 paused 不自动恢复
+      // 仅从 error_suspended 自动恢复，手动 paused 和封号 suspended 不自动恢复
       if (account.status === 'error_suspended') {
         account.status = 'active'
       }
@@ -217,8 +218,8 @@ export class AccountPool {
       // 连续错误过多，自动挂起
       if (stats.errors >= 3) {
         const account = this.accounts.get(id)
-        if (account && account.status !== 'paused') {
-          // 仅非手动暂停的账号才自动挂起
+        if (account && account.status !== 'paused' && account.status !== 'suspended') {
+          // 仅非手动暂停和非封号的账号才自动挂起
           account.status = 'error_suspended'
         }
       }

@@ -470,13 +470,23 @@ export async function getAllAccountsUsage(): Promise<AccountUsage[]> {
         updatedAt: Date.now()
       }
     } catch (error) {
+      const errorMsg = (error as Error).message
       logger.error('Failed to fetch usage for account', {
         id: account.id,
-        error: (error as Error).message
+        error: errorMsg
       })
+
+      // 检测账号被封禁（TEMPORARILY_SUSPENDED），自动标记为 suspended
+      if (errorMsg.includes('TEMPORARILY_SUSPENDED') || errorMsg.includes('temporarily is suspended')) {
+        if (account.status !== 'suspended') {
+          await accountStore.updateAccount(account.id, { status: 'suspended' })
+          logger.warn('Account marked as suspended (banned by Kiro)', { id: account.id })
+        }
+      }
+
       return {
         accountId: account.id,
-        error: (error as Error).message,
+        error: errorMsg,
         updatedAt: Date.now()
       }
     }

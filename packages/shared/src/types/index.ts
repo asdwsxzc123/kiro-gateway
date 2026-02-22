@@ -58,6 +58,11 @@ export interface AccountCredentials {
 }
 
 /**
+ * 账号调度状态
+ */
+export type AccountStatus = 'active' | 'paused' | 'error_suspended' | 'suspended'
+
+/**
  * 账号相关类型 - 与后端 ProxyAccount 对应
  */
 export interface Account {
@@ -78,7 +83,7 @@ export interface Account {
   lastUsed?: number;
   requestCount?: number;
   errorCount?: number;
-  status?: 'active' | 'paused' | 'error_suspended';
+  status?: AccountStatus;
   cooldownUntil?: number;
   createdAt?: number;
 }
@@ -223,6 +228,7 @@ export interface GatewayConfig {
   retryDelay: number;
   requestTimeout: number;
   preferredEndpoint?: 'codewhisperer' | 'amazonq';
+  defaultRegion?: string;
 
   // Token 刷新配置
   tokenRefreshAdvance?: number;
@@ -283,6 +289,7 @@ export interface UpdateConfigRequest {
   retryDelayMs?: number;
   requestTimeout?: number;
   preferredEndpoint?: 'codewhisperer' | 'amazonq';
+  defaultRegion?: string;
   tokenRefreshBeforeExpiry?: number;
   tokenRefreshAdvance?: number; // 前端别名（秒）
 

@@ -35,7 +35,7 @@ export async function isTokenValid(token: string): Promise<boolean> {
   const key = TOKEN_KEY_PREFIX + token
 
   const exists = await redis.exists(key)
-  logger.info('Token validation check', { key, exists, tokenPrefix: token.substring(0, 20) })
+  // logger.info('Token validation check', { key, exists, tokenPrefix: token.substring(0, 20) })
   return exists === 1
 }
 

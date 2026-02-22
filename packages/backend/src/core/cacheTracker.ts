@@ -1,11 +1,17 @@
 /**
  * Cache Tracker — 缓存标记追踪模块
  * 只存哈希、不存内容。用于计费分类。
+ *
+ * 核心策略：
+ * - 系统提示词和 tools 自动进入缓存（cache_creation / cache_read）
+ * - 只有用户消息计入 input_tokens
+ * - 使用 token 数（而非字符数）作为权重，确保拆分准确
  */
 
 import { createHash } from 'crypto'
 import { getRedisClient } from '../storage/redis.js'
 import { createLogger } from '../utils/logger.js'
+import { countTokens, MESSAGE_OVERHEAD_TOKENS } from './tokenCounter.js'
 import type { ClaudeRequest, ClaudeContentBlock, ClaudeSystemBlock } from './types.js'
 
 const logger = createLogger('CacheTracker')
@@ -15,23 +21,23 @@ const logger = createLogger('CacheTracker')
 /** 哈希标记（不包含原始内容） */
 interface CacheableBlock {
   hash: string      // SHA-256 哈希（内容指纹）
-  weight: number    // 估算字符数（用于确定比例）
+  tokens: number    // 估算 token 数（直接用 token 数而非字符数）
 }
 
 /** 缓存比例计算结果（API 调用前） */
 export interface CacheRatio {
-  cacheCreationWeight: number   // cache_creation 块的总权重
-  cacheReadWeight: number       // cache_read 块的总权重
-  uncachedWeight: number        // 未标记 cache_control 的内容权重
-  totalWeight: number           // 总权重
+  cacheCreationWeight: number   // cache_creation 块的总 token 数
+  cacheReadWeight: number       // cache_read 块的总 token 数
+  uncachedWeight: number        // 用户消息的总 token 数
+  totalWeight: number           // 总 token 数
 }
 
 /** 缓存 token 拆分结果（API 返回后） */
 export interface CacheCalculation {
-  uncachedTokens: number        // 未标记 cache_control 的 token
-  cacheCreationTokens: number   // 首次出现的 cache_control token
-  cacheReadTokens: number       // 重复出现的 cache_control token
-  totalInputTokens: number      // 等于 API 返回的 inputTokens
+  uncachedTokens: number        // 用户消息的 token
+  cacheCreationTokens: number   // 首次出现的 system + tools token
+  cacheReadTokens: number       // 重复出现的 system + tools token
+  totalInputTokens: number      // 总计
 }
 
 // ============ 稳定序列化 ============
@@ -100,6 +106,120 @@ function sha256(input: string): string {
   return createHash('sha256').update(input).digest('hex')
 }
 
+// ============ Token 估算辅助 ============
+
+/**
+ * 估算 system prompt 的 token 数
+ */
+function estimateSystemTokens(system: ClaudeRequest['system']): number {
+  if (!system) return 0
+  if (typeof system === 'string') {
+    return system.trim() ? countTokens(system) : 0
+  }
+  if (Array.isArray(system)) {
+    let total = 0
+    for (const block of system) {
+      total += countTokens(block.text || '')
+    }
+    return total
+  }
+  return 0
+}
+
+/**
+ * 估算 tools 定义的 token 数
+ */
+function estimateToolsTokens(tools: ClaudeRequest['tools']): number {
+  if (!tools || tools.length === 0) return 0
+  return countTokens(JSON.stringify(tools))
+}
+
+/**
+ * 估算用户消息的 token 数
+ *
+ * 计入：
+ * - role=user 的纯字符串内容
+ * - role=user 的 text block（不带 cache_control）
+ * - role=user 的 image block（按固定估算值）
+ * - role=user 的 tool_result block
+ *
+ * 忽略：
+ * - assistant 消息（由模型生成，不是用户输入）
+ * - 带 cache_control 的 block（由缓存分类单独统计）
+ */
+function estimateMessagesTokens(messages: ClaudeRequest['messages']): number {
+  let total = 0
+  for (const msg of messages) {
+    if (msg.role !== 'user') continue
+
+    if (typeof msg.content === 'string') {
+      total += countTokens(msg.content)
+    } else if (Array.isArray(msg.content)) {
+      for (const block of msg.content) {
+        if (block.cache_control?.type === 'ephemeral') continue
+
+        if (block.type === 'text' && block.text) {
+          total += countTokens(block.text)
+        } else if (block.type === 'image') {
+          // 图片 token 估算：Claude 按像素计算，标准分辨率约 1600 tokens
+          total += 1600
+        } else if (block.type === 'tool_result') {
+          // tool_result 是用户提交的工具返回结果
+          if (typeof block.content === 'string') {
+            total += countTokens(block.content)
+          } else if (Array.isArray(block.content)) {
+            for (const sub of block.content) {
+              if (sub.text) total += countTokens(sub.text)
+            }
+          }
+        }
+      }
+    }
+  }
+  return total
+}
+
+/**
+ * 仅估算当前用户真实输入的 token 数
+ *
+ * 客户端（如 Claude Code）会在用户消息的 content 数组中注入大量上下文：
+ * - 带 cache_control 的 block（系统提示词缓存、上下文等）
+ * - 不带 cache_control 的 block（system-reminder、文件内容、git status 等）
+ * - 用户真正输入的文本（如 "hi"）→ 始终是 content 数组的最后一个 text block
+ *
+ * 注意：用户输入也可能带有 cache_control（客户端会对所有 block 标记缓存），
+ * 因此不能按 cache_control 过滤，而是直接取最后一个 text block
+ */
+export function estimateUserOnlyTokens(request: ClaudeRequest): number {
+  const messages = request.messages
+  if (messages.length === 0) return 0
+
+  // 从后往前找最后一条 user 消息
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (messages[i].role !== 'user') continue
+
+    const content = messages[i].content
+
+    // 纯字符串内容：整个就是用户输入 + 消息结构开销
+    if (typeof content === 'string') {
+      return countTokens(content) + MESSAGE_OVERHEAD_TOKENS
+    }
+
+    // 数组内容：取最后一个 text block（无论是否有 cache_control）
+    // 加上消息结构开销（role 标记、分隔符等），与 Anthropic API 计费对齐
+    if (Array.isArray(content)) {
+      for (let j = content.length - 1; j >= 0; j--) {
+        const block = content[j]
+        if (block.type === 'text' && block.text) {
+          return countTokens(block.text) + MESSAGE_OVERHEAD_TOKENS
+        }
+      }
+    }
+    return 0
+  }
+  return 0
+}
+
 // ============ 核心函数 ============
 
 /**
@@ -119,18 +239,18 @@ export function extractCacheableBlocks(request: ClaudeRequest): CacheableBlock[]
   if (typeof request.system === 'string' && request.system.trim()) {
     const syntheticBlock = { type: 'text' as const, text: request.system }
     const input = stableHashInput(syntheticBlock)
-    blocks.push({ hash: sha256(input), weight: input.length })
+    blocks.push({ hash: sha256(input), tokens: countTokens(request.system) })
   } else if (Array.isArray(request.system)) {
     for (const block of request.system) {
       const input = stableHashInput(block)
-      blocks.push({ hash: sha256(input), weight: input.length })
+      blocks.push({ hash: sha256(input), tokens: countTokens(block.text || '') })
     }
   }
 
   // 2. Tools 定义 - 自动缓存
   if (request.tools && request.tools.length > 0) {
     const toolsInput = stableStringify(request.tools)
-    blocks.push({ hash: sha256(toolsInput), weight: toolsInput.length })
+    blocks.push({ hash: sha256(toolsInput), tokens: estimateToolsTokens(request.tools) })
   }
 
   // 3. 带 cache_control 的 message content blocks
@@ -139,7 +259,8 @@ export function extractCacheableBlocks(request: ClaudeRequest): CacheableBlock[]
       for (const block of msg.content) {
         if (block.cache_control?.type === 'ephemeral') {
           const input = stableHashInput(block)
-          blocks.push({ hash: sha256(input), weight: input.length })
+          const text = block.type === 'text' && block.text ? block.text : JSON.stringify(block)
+          blocks.push({ hash: sha256(input), tokens: countTokens(text) })
         }
       }
     }
@@ -149,47 +270,26 @@ export function extractCacheableBlocks(request: ClaudeRequest): CacheableBlock[]
 }
 
 /**
- * 估算整个请求的总权重（包含标记和未标记的内容）
- * 使用 stableHashInput().length 确保与哈希权重口径一致
+ * 估算整个请求的总 token 数（直接用 token 数而非字符数）
  *
  * **包含**：
  * - system prompt（系统提示词）
  * - tools 定义
- * - messages（用户消息和助手消息）
+ * - 用户消息（text、image、tool_result，不含 assistant）
  */
 export function estimateRequestWeight(request: ClaudeRequest): number {
-  let totalWeight = 0
+  const systemTokens = estimateSystemTokens(request.system)
+  const toolsTokens = estimateToolsTokens(request.tools)
+  const messagesTokens = estimateMessagesTokens(request.messages)
 
-  // 1. system prompt
-  if (typeof request.system === 'string' && request.system.trim()) {
-    totalWeight += stableHashInput({ type: 'text', text: request.system } as ClaudeSystemBlock).length
-  } else if (Array.isArray(request.system)) {
-    for (const block of request.system) {
-      totalWeight += stableHashInput(block).length
-    }
-  }
-
-  // 2. tools 定义
-  if (request.tools && request.tools.length > 0) {
-    totalWeight += stableStringify(request.tools).length
-  }
-
-  // 3. messages
-  for (const msg of request.messages) {
-    if (typeof msg.content === 'string') {
-      totalWeight += stableHashInput({ type: 'text', text: msg.content } as ClaudeSystemBlock).length
-    } else if (Array.isArray(msg.content)) {
-      for (const block of msg.content) {
-        totalWeight += stableHashInput(block).length
-      }
-    }
-  }
-
-  return totalWeight
+  return systemTokens + toolsTokens + messagesTokens
 }
 
 /**
  * 原子判定+写入，返回缓存比例（API 调用前调用）
+ *
+ * **新逻辑**：直接使用 token 数作为权重，不再用字符数。
+ * 这样 splitTokensByRatio 可以直接使用这些 token 值，不需要额外的估算函数。
  */
 export async function calculateCacheRatio(
   accountId: string,
@@ -207,7 +307,7 @@ export async function calculateCacheRatio(
     hasTools: !!request.tools,
     toolsCount: request.tools?.length || 0,
     messageCount: request.messages.length,
-    blockWeights: blocks.map(b => ({ hash: b.hash.substring(0, 8), weight: b.weight }))
+    blockTokens: blocks.map(b => ({ hash: b.hash.substring(0, 8), tokens: b.tokens }))
   })
 
   if (blocks.length === 0) {
@@ -239,9 +339,9 @@ export async function calculateCacheRatio(
     for (let i = 0; i < blocks.length; i++) {
       const [, result] = results![i]
       if (result === 'OK') {
-        cacheCreationWeight += blocks[i].weight
+        cacheCreationWeight += blocks[i].tokens
       } else {
-        cacheReadWeight += blocks[i].weight
+        cacheReadWeight += blocks[i].tokens
         expireKeys.push(`gateway:cache:${accountId}:${blocks[i].hash}`)
       }
     }
@@ -267,12 +367,21 @@ export async function calculateCacheRatio(
   const markedWeight = cacheReadWeight + cacheCreationWeight
   const uncachedWeight = Math.max(0, totalWeight - markedWeight)
 
+  logger.info('Cache ratio result', {
+    cacheCreationWeight,
+    cacheReadWeight,
+    uncachedWeight,
+    totalWeight
+  })
+
   return { cacheCreationWeight, cacheReadWeight, uncachedWeight, totalWeight }
 }
 
 /**
- * 最大余数法：根据比例和 API 返回的真实 token 总量，拆分为三类
- * 保证: cacheCreationTokens + cacheReadTokens + uncachedTokens === totalInputTokens
+ * 直接使用权重作为 token 值（因为权重已经是 token 数了）
+ *
+ * 不再需要比例拆分！权重就是 token 数，直接使用。
+ * actualInputTokens 参数仅用于兜底（当缓存比例计算失败时）。
  */
 export function splitTokensByRatio(
   ratio: CacheRatio,
@@ -287,51 +396,15 @@ export function splitTokensByRatio(
     }
   }
 
-  const total = actualInputTokens
-
-  // 1. 精确浮点值
-  const exactCreation = total * (ratio.cacheCreationWeight / ratio.totalWeight)
-  const exactRead = total * (ratio.cacheReadWeight / ratio.totalWeight)
-  const exactUncached = total * (ratio.uncachedWeight / ratio.totalWeight)
-
-  // 2. 全部 floor
-  let creation = Math.floor(exactCreation)
-  let read = Math.floor(exactRead)
-  let uncached = Math.floor(exactUncached)
-
-  // 3. 余数
-  let remainder = total - creation - read - uncached
-
-  // 4. 按小数部分降序分配（最大余数法）
-  const fractions = [
-    { key: 'creation' as const, frac: exactCreation - creation },
-    { key: 'read' as const, frac: exactRead - read },
-    { key: 'uncached' as const, frac: exactUncached - uncached }
-  ]
-  fractions.sort((a, b) => b.frac - a.frac)
-
-  for (const item of fractions) {
-    if (remainder <= 0) break
-    if (item.key === 'creation') creation++
-    else if (item.key === 'read') read++
-    else uncached++
-    remainder--
-  }
-
+  // 权重已经是 token 数，直接使用
   const result = {
-    cacheCreationTokens: creation,
-    cacheReadTokens: read,
-    uncachedTokens: uncached,
-    totalInputTokens: total
+    cacheCreationTokens: ratio.cacheCreationWeight,
+    cacheReadTokens: ratio.cacheReadWeight,
+    uncachedTokens: ratio.uncachedWeight,
+    totalInputTokens: ratio.totalWeight
   }
 
   logger.info('Token split result', {
-    ratio: {
-      cacheCreationWeight: ratio.cacheCreationWeight,
-      cacheReadWeight: ratio.cacheReadWeight,
-      uncachedWeight: ratio.uncachedWeight,
-      totalWeight: ratio.totalWeight
-    },
     actualInputTokens,
     result
   })
