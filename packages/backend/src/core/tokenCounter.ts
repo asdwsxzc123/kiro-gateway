@@ -62,7 +62,7 @@ const CJK_LONG_THRESHOLD = 500
  * 基准测试推导：短文本 actual - content_tokens ≈ 20
  * 拆分为 MESSAGE_OVERHEAD(10) + REQUEST_OVERHEAD(10)
  */
-const MESSAGE_OVERHEAD_TOKENS = 10
+export const MESSAGE_OVERHEAD_TOKENS = 1
 
 /**
  * 请求级开销（服务前缀 + 终止标记）

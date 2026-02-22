@@ -284,7 +284,7 @@ export async function getAvailableAccounts(): Promise<ProxyAccount[]> {
         if (!err && data && typeof data === 'object' && Object.keys(data).length > 0) {
           const account = deserializeAccount(data as Record<string, string>)
           // 仅加载 status=active 且不在冷却期的账号
-          if (account.status !== 'paused' && account.status !== 'error_suspended') {
+          if (account.status !== 'paused' && account.status !== 'error_suspended' && account.status !== 'suspended') {
             if (!account.cooldownUntil || account.cooldownUntil < Date.now()) {
               accounts.push(account)
             }

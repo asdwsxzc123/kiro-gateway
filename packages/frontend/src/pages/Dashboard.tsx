@@ -353,6 +353,8 @@ export function Dashboard() {
                         ? "bg-green-500"
                         : account.status === 'paused'
                         ? "bg-yellow-500"
+                        : account.status === 'suspended'
+                        ? "bg-gray-500"
                         : "bg-red-500"
                     }`}
                   />
@@ -360,7 +362,7 @@ export function Dashboard() {
                     {account.email || account.id.slice(0, 8)}
                   </span>
                   <span className="ml-auto text-xs text-muted-foreground">
-                    {account.status === 'active' ? "正常" : account.status === 'paused' ? "已暂停" : "异常挂起"}
+                    {account.status === 'active' ? "正常" : account.status === 'paused' ? "已暂停" : account.status === 'suspended' ? "已封号" : "异常挂起"}
                   </span>
                 </div>
               ))}

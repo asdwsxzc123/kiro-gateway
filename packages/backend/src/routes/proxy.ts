@@ -26,6 +26,8 @@ async function getProxyServer(): Promise<ProxyServer> {
   if (!proxyServer) {
     // 获取配置
     const config = await configStore.getGatewayConfig()
+    const disableTools = config.disableTools ?? config.disableToolCalls ?? false
+    const autoContinueRounds = config.autoContinueRounds ?? config.toolCallAutoRounds ?? 0
 
     proxyServer = new ProxyServer({
       enabled: true,
@@ -40,8 +42,10 @@ async function getProxyServer(): Promise<ProxyServer> {
       tokenRefreshBeforeExpiry: 300,
       autoStart: false,
       preferredEndpoint: config.preferredEndpoint,
-      // 可以从配置中读取这些值
-      autoContinueRounds: 0,
+      defaultRegion: config.defaultRegion,
+      autoContinueRounds,
+      disableTools,
+      autoSwitchOnQuotaExhausted: config.autoSwitchOnQuotaExhausted,
       thinkingOutputFormat: 'thinking'
     })
 

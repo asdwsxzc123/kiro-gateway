@@ -33,13 +33,13 @@ import { refreshTokenByMethod, needsTokenRefresh } from './tokenRefresh.js'
 import { hasWebSearchTool, handleWebSearchStream } from './websearch.js'
 import * as logStore from '../storage/logStore.js'
 import * as statsStore from '../storage/statsStore.js'
+import * as accountStore from '../storage/accountStore.js'
 import * as dailyStatsStore from '../storage/dailyStatsStore.js'
 import * as apiKeyStore from '../storage/apiKeyStore.js'
 import { calculateCost } from './pricing.js'
-import { calculateCacheRatio, splitTokensByRatio } from './cacheTracker.js'
+import { calculateCacheRatio, splitTokensByRatio, estimateUserOnlyTokens, estimateRequestWeight } from './cacheTracker.js'
 import type { CacheRatio, CacheCalculation } from './cacheTracker.js'
 import { computeSessionHash, getSessionAccount, setSessionAccount } from './sessionCache.js'
-import { countTokens } from './tokenCounter.js'
 
 const logger = createLogger('ProxyServer')
 
@@ -322,6 +322,11 @@ export class ProxyServer {
       return null
     }
 
+    // Fallback: 账号没有自身 region 时使用全局默认 region
+    if (!account.region && this.config.defaultRegion) {
+      account = { ...account, region: this.config.defaultRegion }
+    }
+
     // 检查是否需要刷新 Token
     if (this.isTokenExpiringSoon(account) || needsTokenRefresh(account)) {
       logger.info('Token expiring soon, refreshing', { accountId: account.id })
@@ -396,91 +401,47 @@ export class ProxyServer {
   }
 
   /**
-   * 过滤 Kiro payload 中注入的动态内容，只保留用户真实输入和静态系统提示
-   * 移除：
-   * 1. 时间戳注入: [Context: Current time is ...]（动态，每次都变）
-   * 2. 执行导向指令: <execution_discipline>...（虽然静态，但不是用户内容）
-   * 3. --- SYSTEM PROMPT --- 包装符号
-   * 保留：
-   * - 用户原始的 system prompt
-   * - 用户消息
-   * - Tools（会单独计入缓存）
+   * 检测辅助请求（不计费）
+   * - 主题检测：haiku 模型且无工具定义
+   * - 自动建议/补全：用户输入为空（所有内容均在缓存中）且有历史消息
    */
-  private removeInjectedContent(text: string): string {
-    let result = text
-
-    // 移除整个 --- SYSTEM PROMPT --- 块，但提取并保留用户原始内容
-    const systemBlockMatch = text.match(/--- SYSTEM PROMPT ---\n([\s\S]*?)\n--- END SYSTEM PROMPT ---\n\n/)
-    if (systemBlockMatch) {
-      const systemContent = systemBlockMatch[1]
-
-      // 移除时间戳注入（开头）
-      let userContent = systemContent.replace(/^\[Context: Current time is [^\]]+\]\n\n/, '')
-
-      // 移除执行导向指令（结尾）
-      userContent = userContent.replace(/\s*<execution_discipline>[\s\S]*?<\/execution_discipline>\s*$/, '')
-
-      // 替换整个系统块为用户原始内容（如果有的话）
-      if (userContent.trim()) {
-        result = text.replace(/--- SYSTEM PROMPT ---[\s\S]*?--- END SYSTEM PROMPT ---\n\n/, userContent + '\n\n')
-      } else {
-        // 如果没有用户原始内容，完全移除
-        result = text.replace(/--- SYSTEM PROMPT ---[\s\S]*?--- END SYSTEM PROMPT ---\n\n/, '')
+  private isAuxiliaryRequest(request: ClaudeRequest, userOnlyTokens: number): boolean {
+    // 主题检测：轻量模型无工具且用户输入极少（≤1 token）
+    if ((!request.tools || request.tools.length === 0) && /haiku/i.test(request.model) && userOnlyTokens <= 1) {
+      return true
+    }
+    // 自动建议/补全：存在历史对话且最后一条 user 消息全部带 cache_control（系统生成的提示词）
+    // 且用户实际输入极少（≤10 token）
+    if (request.messages.length > 1 && userOnlyTokens <= 10) {
+      const lastUserMsg = [...request.messages].reverse().find(m => m.role === 'user')
+      if (lastUserMsg && Array.isArray(lastUserMsg.content)) {
+        const hasNonCachedText = lastUserMsg.content.some(
+          b => b.type === 'text' && b.text && !b.cache_control
+        )
+        if (!hasNonCachedText) return true
       }
     }
-
-    return result
+    return false
   }
 
   /**
-   * 估算 Kiro Payload 的输入 tokens
-   *
-   * **重要**：为了与缓存权重计算保持一致，此方法：
-   * 1. 移除动态注入内容（时间戳、执行指令）
-   * 2. 只计算用户原始 system prompt、tools 和用户消息
-   * 3. 估算的 tokens 会通过 `splitTokensByRatio` 拆分为：
-   *    - uncachedTokens: 用户真实消息
-   *    - cacheCreationTokens/cacheReadTokens: 系统提示词 + tools
+   * 根据网关配置对请求做轻量裁剪（如禁用 tools）
    */
-  private estimateKiroPayloadInputTokens(payload: KiroPayload): number {
-    const parts: string[] = []
-    const pushText = (value?: string) => {
-      if (value && value.trim()) {
-        // 过滤注入的动态内容
-        const filtered = this.removeInjectedContent(value)
-        if (filtered.trim()) {
-          parts.push(filtered)
-        }
-      }
-    }
-    const pushJson = (value: unknown) => {
-      if (value === undefined || value === null) return
-      parts.push(JSON.stringify(value))
+  private getEffectiveRequest(request: ClaudeRequest): ClaudeRequest {
+    if (!this.config.disableTools || !request.tools || request.tools.length === 0) {
+      return request
     }
 
-    const pushUserInput = (message?: { content?: string; modelId?: string; images?: unknown; userInputMessageContext?: { tools?: unknown; toolResults?: unknown } }) => {
-      if (!message) return
-      pushText(message.content)
-      pushText(message.modelId)
-      pushJson(message.images)
-      // 包含 tools 定义（会通过缓存拆分）
-      pushJson(message.userInputMessageContext?.tools)
-      pushJson(message.userInputMessageContext?.toolResults)
+    logger.info('Tools disabled by config, stripping tools from request', {
+      model: request.model,
+      originalToolsCount: request.tools.length
+    })
+
+    return {
+      ...request,
+      // tools: undefined,
+      // tool_choice: undefined
     }
-
-    const current = payload.conversationState?.currentMessage?.userInputMessage
-    pushUserInput(current)
-
-    for (const historyMessage of payload.conversationState?.history || []) {
-      pushUserInput(historyMessage.userInputMessage)
-      if (historyMessage.assistantResponseMessage) {
-        pushText(historyMessage.assistantResponseMessage.content)
-        pushJson(historyMessage.assistantResponseMessage.toolUses)
-      }
-    }
-
-    if (parts.length === 0) return 1
-    return Math.max(1, countTokens(parts.join('\n')))
   }
 
   // ============ 重试机制 ============
@@ -506,6 +467,19 @@ export class ProxyServer {
           accountId: currentAccount.id,
           error: errorMsg
         })
+
+        // 检测账号被封禁（TEMPORARILY_SUSPENDED）
+        if (errorMsg.includes('TEMPORARILY_SUSPENDED') || errorMsg.includes('temporarily is suspended')) {
+          this.accountPool.setStatus(currentAccount.id, 'suspended')
+          accountStore.updateAccount(currentAccount.id, { status: 'suspended' }).catch(() => {})
+          logger.warn('Account suspended (banned by Kiro), switching account', { accountId: currentAccount.id })
+          const nextAccount = this.accountPool.getNextAvailableAccount(currentAccount.id)
+          if (nextAccount) {
+            currentAccount = nextAccount
+            continue
+          }
+          break
+        }
 
         // 401/403: Token 过期，尝试刷新
         if (errorMsg.includes('401') || errorMsg.includes('403')) {
@@ -559,20 +533,23 @@ export class ProxyServer {
   ): Promise<{ success: boolean; response?: unknown; error?: string }> {
     this.recordNewRequest()
     this.events.onRequest?.({ path: '/v1/messages', method: 'POST' })
+    const effectiveRequest = this.getEffectiveRequest(request)
 
     // Debug: Log request structure
     logger.info('Incoming Claude request', {
-      model: request.model,
-      hasSystem: !!request.system,
-      systemType: typeof request.system,
-      systemLength: typeof request.system === 'string' ? request.system.length : Array.isArray(request.system) ? request.system.length : 0,
-      hasTools: !!request.tools,
-      toolsCount: request.tools?.length || 0,
-      messageCount: request.messages.length
+      model: effectiveRequest.model,
+      hasSystem: !!effectiveRequest.system,
+      systemType: typeof effectiveRequest.system,
+      systemLength: typeof effectiveRequest.system === 'string' ? effectiveRequest.system.length : Array.isArray(effectiveRequest.system) ? effectiveRequest.system.length : 0,
+      hasTools: !!effectiveRequest.tools,
+      toolsCount: effectiveRequest.tools?.length || 0,
+      originalToolsCount: request.tools?.length || 0,
+      toolsDisabled: !!this.config.disableTools,
+      messageCount: effectiveRequest.messages.length
     })
 
     // Sticky Session: try routing to bound account
-    const sessionHash = computeSessionHash(request, _headers?.['x-session-id'])
+    const sessionHash = computeSessionHash(effectiveRequest, _headers?.['x-session-id'])
     let account: ProxyAccount | null = null
 
     if (sessionHash) {
@@ -593,38 +570,55 @@ export class ProxyServer {
       return { success: false, error: 'No available accounts' }
     }
 
+    // Fallback: sticky session 账号也需要 region 兜底
+    if (!account.region && this.config.defaultRegion) {
+      account = { ...account, region: this.config.defaultRegion }
+    }
+
     const startTime = Date.now()
 
-    // Calculate cache ratio (atomic check + write)
-    const cacheRatio = await calculateCacheRatio(account.id, request)
-
     try {
+      const buildPayload = (acc: ProxyAccount) => claudeToKiro(effectiveRequest, acc.profileArn)
       const { result, account: usedAccount } = await this.callWithRetry(
         account,
-        async (acc) => callKiroApi(acc, claudeToKiro(request, acc.profileArn)),
+        async (acc) => callKiroApi(acc, buildPayload(acc), undefined, this.config.preferredEndpoint),
         '/v1/messages'
       )
 
-      // 非流式与流式统一口径：按实际发送的 Kiro payload 语义字段估算输入 token
-      const selfInputTokens = this.estimateKiroPayloadInputTokens(
-        claudeToKiro(request, usedAccount.profileArn)
-      )
+      // 统一使用 Claude 请求格式估算输入 token（system + tools + user messages）
+      const selfInputTokens = estimateRequestWeight(effectiveRequest)
+      // Calculate cache ratio (atomic check + write)
+      const cacheRatio = await calculateCacheRatio(usedAccount.id, effectiveRequest)
+      // Deterministic user-only tokens (no Redis dependency)
+      const userOnlyTokens = estimateUserOnlyTokens(effectiveRequest)
 
-      logger.info('Token calculation for non-stream request', {
-        cacheRatio,
-        selfInputTokens
-      })
+      // 检测辅助请求（主题检测、自动建议），跳过计费
+      const skipBilling = this.isAuxiliaryRequest(effectiveRequest, userOnlyTokens)
 
       // 用自计算的 input tokens 做 cache 拆分
       const cacheCalc = splitTokensByRatio(cacheRatio, selfInputTokens)
-      const uncachedInputTokens = cacheCalc.uncachedTokens
-      const totalInputTokens = cacheCalc.totalInputTokens
+      const uncachedInputTokens = userOnlyTokens ?? cacheCalc.uncachedTokens
+      const cacheWriteTokens = cacheCalc.cacheCreationTokens
+      const cacheReadTokens = cacheCalc.cacheReadTokens
+      const totalInputTokens = uncachedInputTokens + cacheWriteTokens + cacheReadTokens
 
-      logger.info('Final token allocation', {
-        uncachedInputTokens,
-        totalInputTokens,
-        cacheCreationTokens: cacheCalc.cacheCreationTokens,
-        cacheReadTokens: cacheCalc.cacheReadTokens
+      logger.info('=== INPUT TOKEN DEBUG (non-stream) ===', {
+        selfInputTokens,
+        userOnlyTokens,
+        skipBilling,
+        cacheRatio: {
+          cacheCreationWeight: cacheRatio.cacheCreationWeight,
+          cacheReadWeight: cacheRatio.cacheReadWeight,
+          uncachedWeight: cacheRatio.uncachedWeight,
+          totalWeight: cacheRatio.totalWeight
+        },
+        cacheCalc: {
+          uncachedTokens: cacheCalc.uncachedTokens,
+          cacheCreationTokens: cacheCalc.cacheCreationTokens,
+          cacheReadTokens: cacheCalc.cacheReadTokens
+        },
+        finalInputTokens: uncachedInputTokens,
+        finalTotal: totalInputTokens
       })
       // output tokens 由 kiroApi parseEventStream 自计算（tiktoken）
       const outputTokens = result.usage.outputTokens
@@ -635,114 +629,117 @@ export class ProxyServer {
         {
           inputTokens: uncachedInputTokens,
           outputTokens,
-          cacheWriteTokens: cacheCalc.cacheCreationTokens,
-          cacheReadTokens: cacheCalc.cacheReadTokens
+          cacheWriteTokens,
+          cacheReadTokens
         },
-        request.model
+        effectiveRequest.model
       )
 
-      this.recordRequestSuccess()
-      this.stats.totalTokens += totalInputTokens + outputTokens
-      this.stats.inputTokens += uncachedInputTokens
-      this.stats.outputTokens += outputTokens
-      this.accountPool.recordSuccess(usedAccount.id, totalInputTokens + outputTokens)
+      // 辅助请求跳过所有计费和统计
+      if (!skipBilling) {
+        this.recordRequestSuccess()
+        this.stats.totalTokens += totalInputTokens + outputTokens
+        this.stats.inputTokens += uncachedInputTokens
+        this.stats.outputTokens += outputTokens
+        this.accountPool.recordSuccess(usedAccount.id, totalInputTokens + outputTokens)
 
-      this.events.onResponse?.({
-        path: '/v1/messages',
-        model: request.model,
-        status: 200,
-        tokens: totalInputTokens + outputTokens,
-        inputTokens: uncachedInputTokens,
-        outputTokens
-      })
+        this.events.onResponse?.({
+          path: '/v1/messages',
+          model: effectiveRequest.model,
+          status: 200,
+          tokens: totalInputTokens + outputTokens,
+          inputTokens: uncachedInputTokens,
+          outputTokens
+        })
 
-      // Bind Sticky Session
-      if (sessionHash) {
-        setSessionAccount(sessionHash, usedAccount.id).catch(() => {})
+        // Bind Sticky Session
+        if (sessionHash) {
+          setSessionAccount(sessionHash, usedAccount.id).catch(() => {})
+        }
+
+        // Cache-aware cost calculation
+        const cost2 = calculateCost(
+          effectiveRequest.model,
+          totalInputTokens,
+          outputTokens,
+          cacheWriteTokens,
+          cacheReadTokens
+        )
+
+        // Update memory stats
+        this.stats.cacheCreationTokens += cacheWriteTokens
+        this.stats.cacheReadTokens += cacheReadTokens
+
+        // Persist to Redis
+        statsStore.updateGlobalStats(
+          true,
+          uncachedInputTokens,
+          outputTokens,
+          0,
+          cost2.totalCost,
+          cacheWriteTokens,
+          cacheReadTokens
+        ).catch(err => {
+          logger.error('Failed to persist global stats', { error: (err as Error).message })
+        })
+
+        // Update daily stats
+        const today = new Date().toISOString().split('T')[0]
+
+        // 更新全局日统计
+        await dailyStatsStore.updateDailyGlobalStats(
+          today,
+          true,
+          uncachedInputTokens,
+          outputTokens,
+          0,
+          cost2.totalCost,
+          cacheWriteTokens,
+          cacheReadTokens
+        ).catch(err => {
+          logger.error('Failed to persist daily global stats', { error: (err as Error).message })
+        })
+
+        // 更新账号日统计
+        await dailyStatsStore.updateDailyAccountStats(
+          usedAccount.id,
+          today,
+          true,
+          uncachedInputTokens,
+          outputTokens,
+          Date.now() - startTime,
+          cost2.totalCost,
+          cacheWriteTokens,
+          cacheReadTokens
+        ).catch(err => {
+          logger.error('Failed to persist daily account stats', { error: (err as Error).message })
+        })
+
+        // 更新模型日统计
+        await dailyStatsStore.updateDailyModelStats(
+          effectiveRequest.model,
+          today,
+          uncachedInputTokens,
+          outputTokens,
+          cost2.totalCost
+        ).catch(err => {
+          logger.error('Failed to persist daily model stats', { error: (err as Error).message })
+        })
+
+        this.recordRequest({
+          path: '/v1/messages',
+          model: effectiveRequest.model,
+          accountId: usedAccount.id,
+          machineId: usedAccount.machineId,
+          inputTokens: uncachedInputTokens,
+          outputTokens,
+          cacheCreationTokens: cacheWriteTokens,
+          cacheReadTokens,
+          cost: cost2.totalCost,
+          responseTime: Date.now() - startTime,
+          success: true
+        })
       }
-
-      // Cache-aware cost calculation
-      const cost2 = calculateCost(
-        request.model,
-        cacheCalc.totalInputTokens,
-        outputTokens,
-        cacheCalc.cacheCreationTokens,
-        cacheCalc.cacheReadTokens
-      )
-
-      // Update memory stats
-      this.stats.cacheCreationTokens += cacheCalc.cacheCreationTokens
-      this.stats.cacheReadTokens += cacheCalc.cacheReadTokens
-
-      // Persist to Redis
-      statsStore.updateGlobalStats(
-        true,
-        uncachedInputTokens,
-        outputTokens,
-        0,
-        cost2.totalCost,
-        cacheCalc.cacheCreationTokens,
-        cacheCalc.cacheReadTokens
-      ).catch(err => {
-        logger.error('Failed to persist global stats', { error: (err as Error).message })
-      })
-
-      // Update daily stats
-      const today = new Date().toISOString().split('T')[0]
-
-      // 更新全局日统计
-      await dailyStatsStore.updateDailyGlobalStats(
-        today,
-        true,
-        uncachedInputTokens,
-        outputTokens,
-        0,
-        cost2.totalCost,
-        cacheCalc.cacheCreationTokens,
-        cacheCalc.cacheReadTokens
-      ).catch(err => {
-        logger.error('Failed to persist daily global stats', { error: (err as Error).message })
-      })
-
-      // 更新账号日统计
-      await dailyStatsStore.updateDailyAccountStats(
-        usedAccount.id,
-        today,
-        true,
-        uncachedInputTokens,
-        outputTokens,
-        Date.now() - startTime,
-        cost2.totalCost,
-        cacheCalc.cacheCreationTokens,
-        cacheCalc.cacheReadTokens
-      ).catch(err => {
-        logger.error('Failed to persist daily account stats', { error: (err as Error).message })
-      })
-
-      // 更新模型日统计
-      await dailyStatsStore.updateDailyModelStats(
-        request.model,
-        today,
-        uncachedInputTokens,
-        outputTokens,
-        cost2.totalCost
-      ).catch(err => {
-        logger.error('Failed to persist daily model stats', { error: (err as Error).message })
-      })
-
-      this.recordRequest({
-        path: '/v1/messages',
-        model: request.model,
-        accountId: usedAccount.id,
-        machineId: usedAccount.machineId,
-        inputTokens: cacheCalc.uncachedTokens,
-        outputTokens,
-        cacheCreationTokens: cacheCalc.cacheCreationTokens,
-        cacheReadTokens: cacheCalc.cacheReadTokens,
-        cost: cost2.totalCost,
-        responseTime: Date.now() - startTime,
-        success: true
-      })
 
       return { success: true, response }
     } catch (error) {
@@ -751,7 +748,7 @@ export class ProxyServer {
 
       this.events.onResponse?.({
         path: '/v1/messages',
-        model: request.model,
+        model: effectiveRequest.model,
         status: 500,
         error: (error as Error).message
       })
@@ -775,9 +772,10 @@ export class ProxyServer {
   ): Promise<void> {
     this.recordNewRequest()
     this.events.onRequest?.({ path: '/v1/messages', method: 'POST' })
+    const effectiveRequest = this.getEffectiveRequest(request)
 
     // Sticky Session: try routing to bound account
-    const sessionHash = computeSessionHash(request, headers?.['x-session-id'])
+    const sessionHash = computeSessionHash(effectiveRequest, headers?.['x-session-id'])
     let account: ProxyAccount | null = null
 
     if (sessionHash) {
@@ -799,13 +797,18 @@ export class ProxyServer {
       return
     }
 
+    // Fallback: sticky session 账号也需要 region 兜底
+    if (!account.region && this.config.defaultRegion) {
+      account = { ...account, region: this.config.defaultRegion }
+    }
+
     const startTime = Date.now()
 
     // 检查是否为 WebSearch 请求，完全绕过 Kiro generateAssistantResponse
-    if (hasWebSearchTool(request)) {
+    if (hasWebSearchTool(effectiveRequest)) {
       logger.info('WebSearch tool detected, routing to WebSearch handler')
       try {
-        await handleWebSearchStream(request, account, callbacks, matchedApiKey)
+        await handleWebSearchStream(effectiveRequest, account, callbacks, matchedApiKey)
       } catch (error) {
         callbacks.onError(error as Error)
       }
@@ -813,17 +816,17 @@ export class ProxyServer {
     }
 
     // 检查是否启用 Thinking 模式
-    const modelThinkingEnabled = this.config.modelThinkingMode?.[request.model]
+    const modelThinkingEnabled = this.config.modelThinkingMode?.[effectiveRequest.model]
     const headerThinking = headers?.['anthropic-beta']?.toLowerCase().includes('thinking')
-    const requestThinking = request.thinking?.type === 'enabled'
+    const requestThinking = effectiveRequest.thinking?.type === 'enabled'
     const thinkingEnabled = modelThinkingEnabled || headerThinking || requestThinking
 
     try {
-      let kiroPayload = claudeToKiro(request, account.profileArn)
+      let kiroPayload = claudeToKiro(effectiveRequest, account.profileArn)
 
       // 注入 thinking 提示到系统消息位置（payload 第一条 history user 消息前）
       if (thinkingEnabled) {
-        const thinkingPrompt = `<thinking_mode>enabled</thinking_mode>\n<max_thinking_length>${request.thinking?.budget_tokens || 200000}</max_thinking_length>`
+        const thinkingPrompt = `<thinking_mode>enabled</thinking_mode>\n<max_thinking_length>${effectiveRequest.thinking?.budget_tokens || 200000}</max_thinking_length>`
         const history = kiroPayload.conversationState?.history
         if (history && history.length > 0 && history[0].userInputMessage) {
           const content = history[0].userInputMessage.content
@@ -841,14 +844,55 @@ export class ProxyServer {
       }
 
       // Calculate cache ratio before the API call
-      const cacheRatio = await calculateCacheRatio(account.id, request)
-      const estimatedTotalInputTokens = this.estimateKiroPayloadInputTokens(kiroPayload)
+      const cacheRatio = await calculateCacheRatio(account.id, effectiveRequest)
+      const estimatedTotalInputTokens = estimateRequestWeight(effectiveRequest)
+      // Deterministic user-only tokens (no Redis dependency)
+      const userOnlyTokens = estimateUserOnlyTokens(effectiveRequest)
+
+      // 检测辅助请求（主题检测、自动建议），跳过计费
+      const skipBilling = this.isAuxiliaryRequest(effectiveRequest, userOnlyTokens)
+      if (skipBilling) {
+        logger.info('Auxiliary request detected, skipping billing', {
+          model: effectiveRequest.model,
+          messagesCount: effectiveRequest.messages.length,
+          toolsCount: effectiveRequest.tools?.length || 0,
+          userOnlyTokens
+        })
+      }
+
+      // Debug: 关键排查日志
+      const debugCacheCalc = splitTokensByRatio(cacheRatio, estimatedTotalInputTokens)
+      logger.info('=== CACHE DEBUG (stream) ===', {
+        model: effectiveRequest.model,
+        hasSystem: !!effectiveRequest.system,
+        systemType: typeof effectiveRequest.system,
+        systemIsArray: Array.isArray(effectiveRequest.system),
+        systemArrayLen: Array.isArray(effectiveRequest.system) ? effectiveRequest.system.length : 0,
+        hasTools: !!effectiveRequest.tools,
+        toolsCount: effectiveRequest.tools?.length || 0,
+        originalToolsCount: request.tools?.length || 0,
+        toolsDisabled: !!this.config.disableTools,
+        messageCount: effectiveRequest.messages.length,
+        cacheRatio: {
+          cacheCreationWeight: cacheRatio.cacheCreationWeight,
+          cacheReadWeight: cacheRatio.cacheReadWeight,
+          uncachedWeight: cacheRatio.uncachedWeight,
+          totalWeight: cacheRatio.totalWeight
+        },
+        estimatedTotalInputTokens,
+        userOnlyTokens,
+        split: {
+          uncachedTokens: debugCacheCalc.uncachedTokens,
+          cacheCreationTokens: debugCacheCalc.cacheCreationTokens,
+          cacheReadTokens: debugCacheCalc.cacheReadTokens
+        }
+      })
 
       await this.handleClaudeStream(
         callbacks,
         account,
         kiroPayload,
-        request.model,
+        effectiveRequest.model,
         startTime,
         0,
         undefined,
@@ -857,14 +901,16 @@ export class ProxyServer {
         matchedApiKey,
         cacheRatio,
         sessionHash,
-        estimatedTotalInputTokens
+        estimatedTotalInputTokens,
+        userOnlyTokens,
+        skipBilling
       )
 
       callbacks.onComplete()
     } catch (error) {
       this.events.onResponse?.({
         path: '/v1/messages',
-        model: request.model,
+        model: effectiveRequest.model,
         status: 500,
         error: (error as Error).message
       })
@@ -891,7 +937,9 @@ export class ProxyServer {
     matchedApiKey?: ApiKey,
     cacheRatio?: CacheRatio | null,
     sessionHash?: string | null,
-    estimatedTotalInputTokens?: number
+    estimatedTotalInputTokens?: number,
+    userOnlyTokens?: number,
+    skipBilling?: boolean
   ): Promise<void> {
     const id = msgId || `msg_${uuidv4()}`
     let currentBlockIndex = contentBlockIndex
@@ -907,8 +955,8 @@ export class ProxyServer {
     let textBuffer = ''
     let inThinkingTagBlock = false
 
-    // 自计算输入 tokens（优先使用调用方已计算值，fallback 使用 Kiro payload 语义字段估算）
-    const estimatedInputTokens = estimatedTotalInputTokens ?? this.estimateKiroPayloadInputTokens(kiroPayload)
+    // 自计算输入 tokens（优先使用调用方已计算值，fallback 给 1 因为 splitTokensByRatio 仅在 totalWeight===0 时用）
+    const estimatedInputTokens = estimatedTotalInputTokens ?? 1
     const estimatedCacheCalc = cacheRatio ? splitTokensByRatio(cacheRatio, estimatedInputTokens) : null
 
     // 关闭 thinking 块的辅助函数
@@ -1037,6 +1085,13 @@ export class ProxyServer {
 
     // 发送 message_start（仅首轮）
     if (currentRound === 0) {
+      logger.info('=== STREAM TOKEN DECISION (message_start) ===', {
+        userOnlyTokens,
+        estimatedCacheCalcUncached: estimatedCacheCalc?.uncachedTokens,
+        estimatedInputTokens,
+        chosen_input_tokens: userOnlyTokens ?? estimatedCacheCalc?.uncachedTokens ?? estimatedInputTokens,
+        source: userOnlyTokens != null ? 'userOnlyTokens' : estimatedCacheCalc ? 'cacheCalc.uncachedTokens' : 'estimatedInputTokens'
+      })
       const messageStart = createClaudeStreamEvent('message_start', {
         message: {
           id,
@@ -1047,7 +1102,7 @@ export class ProxyServer {
           stop_reason: null,
           stop_sequence: null,
           usage: {
-            input_tokens: estimatedCacheCalc?.uncachedTokens ?? estimatedInputTokens,
+            input_tokens: userOnlyTokens ?? estimatedCacheCalc?.uncachedTokens ?? estimatedInputTokens,
             output_tokens: 0,
             cache_creation_input_tokens: estimatedCacheCalc?.cacheCreationTokens ?? 0,
             cache_read_input_tokens: estimatedCacheCalc?.cacheReadTokens ?? 0
@@ -1135,110 +1190,124 @@ export class ProxyServer {
           }
           const cacheWriteTokens = cacheCalc?.cacheCreationTokens ?? 0
           const cacheReadTokens = cacheCalc?.cacheReadTokens ?? 0
-          const totalInputTokens = cacheCalc?.totalInputTokens ?? estimatedInputTokens
-          const uncachedInputTokens = cacheCalc?.uncachedTokens ?? estimatedInputTokens
+          const uncachedInputTokens = userOnlyTokens ?? cacheCalc?.uncachedTokens ?? estimatedInputTokens
+          const totalInputTokens = uncachedInputTokens + cacheWriteTokens + cacheReadTokens
 
-          this.recordRequestSuccess()
-          this.stats.totalTokens += totalInputTokens + outputTokens
-          this.stats.inputTokens += uncachedInputTokens
-          this.stats.outputTokens += outputTokens
-          this.stats.totalCredits += 0
-          this.accountPool.recordSuccess(account.id, totalInputTokens + outputTokens)
-
-          // Bind Sticky Session
-          if (sessionHash) {
-            setSessionAccount(sessionHash, account.id).catch(() => {})
-          }
-
-          this.events.onResponse?.({
-            path: '/v1/messages',
-            model,
-            status: 200,
-            tokens: totalInputTokens + outputTokens,
-            inputTokens: uncachedInputTokens,
-            outputTokens,
-            credits: 0
-          })
-
-          const costStream2 = calculateCost(
-            model,
-            totalInputTokens,
-            outputTokens,
+          logger.info('=== STREAM TOKEN DECISION (completion) ===', {
+            userOnlyTokens,
+            cacheCalcUncachedTokens: cacheCalc?.uncachedTokens,
+            estimatedInputTokens,
+            uncachedInputTokens,
             cacheWriteTokens,
-            cacheReadTokens
-          )
-          this.recordRequest({
-            path: '/v1/messages',
-            model,
-            accountId: account.id,
-            machineId: account.machineId,
-            inputTokens: uncachedInputTokens,
-            outputTokens,
-            cacheCreationTokens: cacheWriteTokens,
             cacheReadTokens,
-            cost: costStream2.totalCost,
-            credits: 0,
-            responseTime: Date.now() - startTime,
-            success: true
+            totalInputTokens,
+            source: userOnlyTokens != null ? 'userOnlyTokens' : cacheCalc ? 'cacheCalc.uncachedTokens' : 'estimatedInputTokens'
           })
 
-          statsStore.updateGlobalStats(
-            true,
-            uncachedInputTokens,
-            outputTokens,
-            0,
-            costStream2.totalCost,
-            cacheWriteTokens,
-            cacheReadTokens
-          ).catch(err => {
-            logger.error('Failed to persist global stats', { error: (err as Error).message })
-          })
+          // 辅助请求（主题检测、自动建议）跳过所有计费和统计
+          if (!skipBilling) {
+            this.recordRequestSuccess()
+            this.stats.totalTokens += totalInputTokens + outputTokens
+            this.stats.inputTokens += uncachedInputTokens
+            this.stats.outputTokens += outputTokens
+            this.stats.totalCredits += 0
+            this.accountPool.recordSuccess(account.id, totalInputTokens + outputTokens)
 
-          // Update daily stats
-          const today = new Date().toISOString().split('T')[0]
+            // Bind Sticky Session
+            if (sessionHash) {
+              setSessionAccount(sessionHash, account.id).catch(() => {})
+            }
 
-          // 更新全局日统计
-          await dailyStatsStore.updateDailyGlobalStats(
-            today,
-            true,
-            uncachedInputTokens,
-            outputTokens,
-            0,
-            costStream2.totalCost,
-            cacheWriteTokens,
-            cacheReadTokens
-          ).catch(err => {
-            logger.error('Failed to persist daily global stats', { error: (err as Error).message })
-          })
+            this.events.onResponse?.({
+              path: '/v1/messages',
+              model,
+              status: 200,
+              tokens: totalInputTokens + outputTokens,
+              inputTokens: uncachedInputTokens,
+              outputTokens,
+              credits: 0
+            })
 
-          // 更新账号日统计
-          await dailyStatsStore.updateDailyAccountStats(
-            account.id,
-            today,
-            true,
-            uncachedInputTokens,
-            outputTokens,
-            Date.now() - startTime,
-            costStream2.totalCost,
-            cacheWriteTokens,
-            cacheReadTokens
-          ).catch(err => {
-            logger.error('Failed to persist daily account stats', { error: (err as Error).message })
-          })
+            const costStream2 = calculateCost(
+              model,
+              totalInputTokens,
+              outputTokens,
+              cacheWriteTokens,
+              cacheReadTokens
+            )
+            this.recordRequest({
+              path: '/v1/messages',
+              model,
+              accountId: account.id,
+              machineId: account.machineId,
+              inputTokens: uncachedInputTokens,
+              outputTokens,
+              cacheCreationTokens: cacheWriteTokens,
+              cacheReadTokens,
+              cost: costStream2.totalCost,
+              credits: 0,
+              responseTime: Date.now() - startTime,
+              success: true
+            })
 
-          // 更新模型日统计
-          await dailyStatsStore.updateDailyModelStats(
-            model,
-            today,
-            uncachedInputTokens,
-            outputTokens,
-            costStream2.totalCost
-          ).catch(err => {
-            logger.error('Failed to persist daily model stats', { error: (err as Error).message })
-          })
+            statsStore.updateGlobalStats(
+              true,
+              uncachedInputTokens,
+              outputTokens,
+              0,
+              costStream2.totalCost,
+              cacheWriteTokens,
+              cacheReadTokens
+            ).catch(err => {
+              logger.error('Failed to persist global stats', { error: (err as Error).message })
+            })
 
-          if (matchedApiKey) {
-            this.recordApiKeyUsage(matchedApiKey.id, 0, uncachedInputTokens, outputTokens, costStream2.totalCost, model, '/v1/messages')
+            // Update daily stats
+            const today = new Date().toISOString().split('T')[0]
+
+            // 更新全局日统计
+            await dailyStatsStore.updateDailyGlobalStats(
+              today,
+              true,
+              uncachedInputTokens,
+              outputTokens,
+              0,
+              costStream2.totalCost,
+              cacheWriteTokens,
+              cacheReadTokens
+            ).catch(err => {
+              logger.error('Failed to persist daily global stats', { error: (err as Error).message })
+            })
+
+            // 更新账号日统计
+            await dailyStatsStore.updateDailyAccountStats(
+              account.id,
+              today,
+              true,
+              uncachedInputTokens,
+              outputTokens,
+              Date.now() - startTime,
+              costStream2.totalCost,
+              cacheWriteTokens,
+              cacheReadTokens
+            ).catch(err => {
+              logger.error('Failed to persist daily account stats', { error: (err as Error).message })
+            })
+
+            // 更新模型日统计
+            await dailyStatsStore.updateDailyModelStats(
+              model,
+              today,
+              uncachedInputTokens,
+              outputTokens,
+              costStream2.totalCost
+            ).catch(err => {
+              logger.error('Failed to persist daily model stats', { error: (err as Error).message })
+            })
+
+            if (matchedApiKey) {
+              this.recordApiKeyUsage(matchedApiKey.id, 0, uncachedInputTokens, outputTokens, costStream2.totalCost, model, '/v1/messages')
+            }
           }
 
           // 检查是否需要自动继续
@@ -1303,7 +1372,10 @@ export class ProxyServer {
                 currentBlockIndex,
                 matchedApiKey,
                 null,          // don't recalculate cache ratio in auto-continue
-                sessionHash    // keep session hash for binding
+                sessionHash,   // keep session hash for binding
+                undefined,     // estimatedTotalInputTokens
+                undefined,     // userOnlyTokens
+                skipBilling    // preserve billing flag
               )
             } catch (error) {
               logger.error('Claude auto-continue error', { error: (error as Error).message })
@@ -1343,7 +1415,9 @@ export class ProxyServer {
           this.recordRequestFailed()
           this.accountPool.recordError(account.id, error.message.includes('429'))
           reject(error)
-        }
+        },
+        undefined,
+        this.config.preferredEndpoint
       )
     })
   }

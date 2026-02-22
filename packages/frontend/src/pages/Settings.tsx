@@ -324,6 +324,7 @@ export function Settings() {
       disableToolCalls: localConfig.disableToolCalls ?? config?.disableToolCalls,
       toolCallAutoRounds: localConfig.toolCallAutoRounds ?? config?.toolCallAutoRounds,
       preferredEndpoint: localConfig.preferredEndpoint ?? config?.preferredEndpoint,
+      defaultRegion: localConfig.defaultRegion ?? config?.defaultRegion,
       enableRequestLogging: localConfig.enableRequestLogging ?? config?.enableRequestLogging,
     })
   }
@@ -1031,6 +1032,25 @@ export function Settings() {
 
               {/* 数值和选择配置 */}
               <div className="grid gap-4 md:grid-cols-2">
+                <div className="space-y-2">
+                  <Label htmlFor="defaultRegion">默认 Region</Label>
+                  <Input
+                    id="defaultRegion"
+                    type="text"
+                    placeholder="us-east-1"
+                    value={localConfig.defaultRegion ?? config?.defaultRegion ?? "us-east-1"}
+                    onChange={(e) =>
+                      setLocalConfig({
+                        ...localConfig,
+                        defaultRegion: e.target.value,
+                      })
+                    }
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    API 端点的默认 AWS Region，账号自身 region 优先
+                  </p>
+                </div>
+
                 <div className="space-y-2">
                   <Label htmlFor="toolCallAutoRounds">工具调用自动继续轮数</Label>
                   <Input
