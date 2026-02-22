@@ -395,10 +395,63 @@ export class ProxyServer {
     })
   }
 
+  /**
+   * 过滤 Kiro payload 中注入的动态内容，只保留用户真实输入和静态系统提示
+   * 移除：
+   * 1. 时间戳注入: [Context: Current time is ...]（动态，每次都变）
+   * 2. 执行导向指令: <execution_discipline>...（虽然静态，但不是用户内容）
+   * 3. --- SYSTEM PROMPT --- 包装符号
+   * 保留：
+   * - 用户原始的 system prompt
+   * - 用户消息
+   * - Tools（会单独计入缓存）
+   */
+  private removeInjectedContent(text: string): string {
+    let result = text
+
+    // 移除整个 --- SYSTEM PROMPT --- 块，但提取并保留用户原始内容
+    const systemBlockMatch = text.match(/--- SYSTEM PROMPT ---\n([\s\S]*?)\n--- END SYSTEM PROMPT ---\n\n/)
+    if (systemBlockMatch) {
+      const systemContent = systemBlockMatch[1]
+
+      // 移除时间戳注入（开头）
+      let userContent = systemContent.replace(/^\[Context: Current time is [^\]]+\]\n\n/, '')
+
+      // 移除执行导向指令（结尾）
+      userContent = userContent.replace(/\s*<execution_discipline>[\s\S]*?<\/execution_discipline>\s*$/, '')
+
+      // 替换整个系统块为用户原始内容（如果有的话）
+      if (userContent.trim()) {
+        result = text.replace(/--- SYSTEM PROMPT ---[\s\S]*?--- END SYSTEM PROMPT ---\n\n/, userContent + '\n\n')
+      } else {
+        // 如果没有用户原始内容，完全移除
+        result = text.replace(/--- SYSTEM PROMPT ---[\s\S]*?--- END SYSTEM PROMPT ---\n\n/, '')
+      }
+    }
+
+    return result
+  }
+
+  /**
+   * 估算 Kiro Payload 的输入 tokens
+   *
+   * **重要**：为了与缓存权重计算保持一致，此方法：
+   * 1. 移除动态注入内容（时间戳、执行指令）
+   * 2. 只计算用户原始 system prompt、tools 和用户消息
+   * 3. 估算的 tokens 会通过 `splitTokensByRatio` 拆分为：
+   *    - uncachedTokens: 用户真实消息
+   *    - cacheCreationTokens/cacheReadTokens: 系统提示词 + tools
+   */
   private estimateKiroPayloadInputTokens(payload: KiroPayload): number {
     const parts: string[] = []
     const pushText = (value?: string) => {
-      if (value && value.trim()) parts.push(value)
+      if (value && value.trim()) {
+        // 过滤注入的动态内容
+        const filtered = this.removeInjectedContent(value)
+        if (filtered.trim()) {
+          parts.push(filtered)
+        }
+      }
     }
     const pushJson = (value: unknown) => {
       if (value === undefined || value === null) return
@@ -410,6 +463,7 @@ export class ProxyServer {
       pushText(message.content)
       pushText(message.modelId)
       pushJson(message.images)
+      // 包含 tools 定义（会通过缓存拆分）
       pushJson(message.userInputMessageContext?.tools)
       pushJson(message.userInputMessageContext?.toolResults)
     }
@@ -506,6 +560,17 @@ export class ProxyServer {
     this.recordNewRequest()
     this.events.onRequest?.({ path: '/v1/messages', method: 'POST' })
 
+    // Debug: Log request structure
+    logger.info('Incoming Claude request', {
+      model: request.model,
+      hasSystem: !!request.system,
+      systemType: typeof request.system,
+      systemLength: typeof request.system === 'string' ? request.system.length : Array.isArray(request.system) ? request.system.length : 0,
+      hasTools: !!request.tools,
+      toolsCount: request.tools?.length || 0,
+      messageCount: request.messages.length
+    })
+
     // Sticky Session: try routing to bound account
     const sessionHash = computeSessionHash(request, _headers?.['x-session-id'])
     let account: ProxyAccount | null = null
@@ -545,10 +610,22 @@ export class ProxyServer {
         claudeToKiro(request, usedAccount.profileArn)
       )
 
+      logger.info('Token calculation for non-stream request', {
+        cacheRatio,
+        selfInputTokens
+      })
+
       // 用自计算的 input tokens 做 cache 拆分
       const cacheCalc = splitTokensByRatio(cacheRatio, selfInputTokens)
       const uncachedInputTokens = cacheCalc.uncachedTokens
       const totalInputTokens = cacheCalc.totalInputTokens
+
+      logger.info('Final token allocation', {
+        uncachedInputTokens,
+        totalInputTokens,
+        cacheCreationTokens: cacheCalc.cacheCreationTokens,
+        cacheReadTokens: cacheCalc.cacheReadTokens
+      })
       // output tokens 由 kiroApi parseEventStream 自计算（tiktoken）
       const outputTokens = result.usage.outputTokens
 
