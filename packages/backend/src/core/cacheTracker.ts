@@ -103,24 +103,37 @@ function sha256(input: string): string {
 // ============ 核心函数 ============
 
 /**
- * 从 Claude 请求中提取所有带 cache_control: { type: 'ephemeral' } 的 block
- * 提取范围：request.system（ClaudeSystemBlock[]）+ request.messages[*].content（ClaudeContentBlock[]）
- * string 类型的 system 和 content 不可能带 cache_control，跳过
+ * 从 Claude 请求中提取所有可缓存的 block
+ *
+ * **自动缓存策略**：
+ * 1. system blocks（系统提示词）→ 自动标记为可缓存
+ * 2. tools 定义 → 自动标记为可缓存
+ * 3. 带 cache_control: { type: 'ephemeral' } 的 message content blocks → 可缓存
+ *
+ * 目标：只有用户真实输入计入 input_tokens，系统提示词和工具定义进入缓存
  */
 export function extractCacheableBlocks(request: ClaudeRequest): CacheableBlock[] {
   const blocks: CacheableBlock[] = []
 
-  // system blocks
-  if (Array.isArray(request.system)) {
+  // 1. 系统提示词 - 自动缓存（无论是否有 cache_control）
+  if (typeof request.system === 'string' && request.system.trim()) {
+    const syntheticBlock = { type: 'text' as const, text: request.system }
+    const input = stableHashInput(syntheticBlock)
+    blocks.push({ hash: sha256(input), weight: input.length })
+  } else if (Array.isArray(request.system)) {
     for (const block of request.system) {
-      if (block.cache_control?.type === 'ephemeral') {
-        const input = stableHashInput(block)
-        blocks.push({ hash: sha256(input), weight: input.length })
-      }
+      const input = stableHashInput(block)
+      blocks.push({ hash: sha256(input), weight: input.length })
     }
   }
 
-  // message content blocks
+  // 2. Tools 定义 - 自动缓存
+  if (request.tools && request.tools.length > 0) {
+    const toolsInput = stableStringify(request.tools)
+    blocks.push({ hash: sha256(toolsInput), weight: toolsInput.length })
+  }
+
+  // 3. 带 cache_control 的 message content blocks
   for (const msg of request.messages) {
     if (Array.isArray(msg.content)) {
       for (const block of msg.content) {
@@ -138,12 +151,17 @@ export function extractCacheableBlocks(request: ClaudeRequest): CacheableBlock[]
 /**
  * 估算整个请求的总权重（包含标记和未标记的内容）
  * 使用 stableHashInput().length 确保与哈希权重口径一致
+ *
+ * **包含**：
+ * - system prompt（系统提示词）
+ * - tools 定义
+ * - messages（用户消息和助手消息）
  */
 export function estimateRequestWeight(request: ClaudeRequest): number {
   let totalWeight = 0
 
-  // system prompt
-  if (typeof request.system === 'string') {
+  // 1. system prompt
+  if (typeof request.system === 'string' && request.system.trim()) {
     totalWeight += stableHashInput({ type: 'text', text: request.system } as ClaudeSystemBlock).length
   } else if (Array.isArray(request.system)) {
     for (const block of request.system) {
@@ -151,7 +169,12 @@ export function estimateRequestWeight(request: ClaudeRequest): number {
     }
   }
 
-  // messages
+  // 2. tools 定义
+  if (request.tools && request.tools.length > 0) {
+    totalWeight += stableStringify(request.tools).length
+  }
+
+  // 3. messages
   for (const msg of request.messages) {
     if (typeof msg.content === 'string') {
       totalWeight += stableHashInput({ type: 'text', text: msg.content } as ClaudeSystemBlock).length
@@ -175,15 +198,20 @@ export async function calculateCacheRatio(
   const blocks = extractCacheableBlocks(request)
   const totalWeight = estimateRequestWeight(request)
 
-  // logger.info('Cache ratio calculation', {
-  //   model: request.model,
-  //   blocksFound: blocks.length,
-  //   totalWeight,
-  //   hasSystemArray: Array.isArray(request.system),
-  //   systemBlockCount: Array.isArray(request.system) ? request.system.length : 0
-  // })
+  logger.info('Cache ratio calculation', {
+    model: request.model,
+    blocksFound: blocks.length,
+    totalWeight,
+    hasSystem: !!request.system,
+    systemType: typeof request.system,
+    hasTools: !!request.tools,
+    toolsCount: request.tools?.length || 0,
+    messageCount: request.messages.length,
+    blockWeights: blocks.map(b => ({ hash: b.hash.substring(0, 8), weight: b.weight }))
+  })
 
   if (blocks.length === 0) {
+    logger.warn('No cacheable blocks found, all content will be uncached')
     return {
       cacheCreationWeight: 0,
       cacheReadWeight: 0,
@@ -290,10 +318,23 @@ export function splitTokensByRatio(
     remainder--
   }
 
-  return {
+  const result = {
     cacheCreationTokens: creation,
     cacheReadTokens: read,
     uncachedTokens: uncached,
     totalInputTokens: total
   }
+
+  logger.info('Token split result', {
+    ratio: {
+      cacheCreationWeight: ratio.cacheCreationWeight,
+      cacheReadWeight: ratio.cacheReadWeight,
+      uncachedWeight: ratio.uncachedWeight,
+      totalWeight: ratio.totalWeight
+    },
+    actualInputTokens,
+    result
+  })
+
+  return result
 }

@@ -271,7 +271,7 @@ export async function testAccountConnection(id: string): Promise<{
 
     // 发送请求并收集响应
     let responseContent = ''
-    let usage = { inputTokens: 0, outputTokens: 0, credits: 0 }
+    let usage = { outputTokens: 0, credits: 0 }
 
     await new Promise<void>((resolve, reject) => {
       callKiroApiStream(
@@ -295,7 +295,6 @@ export async function testAccountConnection(id: string): Promise<{
       id,
       model: selectedModel.modelId,
       responseLength: responseContent.length,
-      inputTokens: usage.inputTokens,
       outputTokens: usage.outputTokens
     })
 
@@ -379,8 +378,8 @@ export async function selectAvailableAccount(): Promise<ProxyAccount | null> {
       return { ...selected, accessToken: result.accessToken }
     }
 
-    // 刷新失败，标记为不可用
-    await accountStore.updateAccount(selected.id, { isAvailable: false })
+    // 刷新失败，标记为异常挂起
+    await accountStore.updateAccount(selected.id, { status: 'error_suspended' })
     logger.error('Account marked unavailable due to token refresh failure', { id: selected.id })
 
     // 递归选择下一个
@@ -493,4 +492,58 @@ export async function getAllAccountsUsage(): Promise<AccountUsage[]> {
   })
 
   return results
+}
+
+/**
+ * 暂停账号调度
+ */
+export async function pauseAccount(id: string): Promise<ProxyAccount | null> {
+  const account = await accountStore.getAccountById(id)
+  if (!account) return null
+
+  const updated = await accountStore.updateAccount(id, { status: 'paused' })
+  if (updated) {
+    logger.info('Account paused', { id })
+  }
+  return updated
+}
+
+/**
+ * 恢复账号调度
+ */
+export async function resumeAccount(id: string): Promise<ProxyAccount | null> {
+  const account = await accountStore.getAccountById(id)
+  if (!account) return null
+
+  const updated = await accountStore.updateAccount(id, { status: 'active' })
+  if (updated) {
+    logger.info('Account resumed', { id })
+  }
+  return updated
+}
+
+/**
+ * 批量暂停账号调度
+ */
+export async function batchPauseAccounts(accountIds: string[]): Promise<number> {
+  let updated = 0
+  for (const id of accountIds) {
+    const result = await accountStore.updateAccount(id, { status: 'paused' })
+    if (result) updated++
+  }
+  logger.info('Batch pause completed', { requested: accountIds.length, updated })
+  return updated
+}
+
+/**
+ * 批量恢复账号调度
+ */
+export async function batchResumeAccounts(accountIds: string[]): Promise<number> {
+  let updated = 0
+  for (const id of accountIds) {
+    const result = await accountStore.updateAccount(id, { status: 'active' })
+    if (result) updated++
+  }
+  logger.info('Batch resume completed', { requested: accountIds.length, updated })
+  return updated
 }

@@ -193,7 +193,7 @@ export interface ProxyAccount {
   lastUsed?: number
   requestCount?: number
   errorCount?: number
-  isAvailable?: boolean
+  status?: 'active' | 'paused' | 'error_suspended'  // 调度状态，默认 active
   cooldownUntil?: number
   createdAt?: number
 }
@@ -225,7 +225,7 @@ export interface UpdateAccountRequest {
   provider?: string
   profileArn?: string
   machineId?: string
-  isAvailable?: boolean
+  status?: 'active' | 'paused' | 'error_suspended'
   expiresAt?: number
 }
 

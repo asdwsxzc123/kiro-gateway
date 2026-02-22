@@ -15,6 +15,7 @@ import type {
   ProxyAccount
 } from './types.js'
 import { createLogger } from '../utils/logger.js'
+import { countTokens } from './tokenCounter.js'
 
 const logger = createLogger('KiroAPI')
 
@@ -514,37 +515,27 @@ interface ToolUseState {
   inputBuffer: string
 }
 
+// parseTokenUsage / toSafeNumber 已移除
+// Token 计算现在完全由 tokenCounter.ts 自行完成，不再依赖 API 返回
+
 /**
  * 解析 AWS Event Stream 二进制格式
  */
 async function parseEventStream(
   body: ReadableStream<Uint8Array>,
   onChunk: (text: string, toolUse?: KiroToolUse, isThinking?: boolean) => void,
-  onComplete: (usage: { inputTokens: number; outputTokens: number; credits: number; cacheReadTokens?: number; cacheWriteTokens?: number; reasoningTokens?: number }) => void,
-  onError: (error: Error) => void,
-  inputChars: number = 0
+  onComplete: (usage: { outputTokens: number; credits: number }) => void,
+  onError: (error: Error) => void
 ): Promise<void> {
   const reader = body.getReader()
   let buffer = new Uint8Array(0)
-  const usage = {
-    inputTokens: 0,
-    outputTokens: 0,
-    credits: 0,
-    cacheReadTokens: 0,
-    cacheWriteTokens: 0,
-    reasoningTokens: 0
-  }
-
-  let totalOutputChars = 0
-
-  if (inputChars > 0) {
-    usage.inputTokens = Math.max(1, Math.round(inputChars / 3))
-  }
+  // 自计算 token：仅累积模型原生输出（assistant/reasoning/tool_use），不含网关拼接文本
+  let allOutputText = ''
 
   let currentToolUse: ToolUseState | null = null
   const processedIds = new Set<string>()
 
-  console.log(`[parseEventStream] 开始 inputChars=${inputChars}`)
+  console.log(`[parseEventStream] 开始（自计算 token 模式）`)
 
   try {
     while (true) {
@@ -587,7 +578,7 @@ async function parseEventStream(
               // console.log(`[assistantResponse] content=${content?.slice(0, 150)}`)
               if (content) {
                 onChunk(content)
-                totalOutputChars += content.length
+                allOutputText += content
               }
             }
 
@@ -690,40 +681,28 @@ async function parseEventStream(
                   input: finalInput
                 })
 
+                // 累积 tool use 输出到 allOutputText（用于自计算 output tokens）
+                allOutputText += currentToolUse.name + JSON.stringify(finalInput)
+
                 processedIds.add(currentToolUse.toolUseId)
                 currentToolUse = null
               }
             }
 
-            // 处理 messageMetadataEvent
+            // 处理 messageMetadataEvent — 全自实现计费模式下仅记录日志，不读取 token/credits
             if (eventType === 'messageMetadataEvent' || event.messageMetadataEvent) {
               const metadata = event.messageMetadataEvent || event
-              // 调试：打印完整的 tokenUsage 数据
-              console.log('[messageMetadataEvent] tokenUsage:', JSON.stringify(metadata.tokenUsage, null, 2))
-              if (metadata.tokenUsage) {
-                const tokenUsage = metadata.tokenUsage
-                const uncached = tokenUsage.uncachedInputTokens || 0
-                const cacheRead = tokenUsage.cacheReadInputTokens || 0
-                const cacheWrite = tokenUsage.cacheWriteInputTokens || 0
-                const calculatedInput = uncached + cacheRead + cacheWrite
-
-                console.log('[messageMetadataEvent] parsed:', { uncached, cacheRead, cacheWrite, calculatedInput })
-
-                if (calculatedInput > 0) usage.inputTokens = calculatedInput
-                if (tokenUsage.outputTokens) usage.outputTokens = tokenUsage.outputTokens
-
-                usage.cacheReadTokens = cacheRead
-                usage.cacheWriteTokens = cacheWrite
-              }
+              logger.debug('messageMetadataEvent received (token 自计算，忽略 API 返回的 tokenUsage)', {
+                tokenUsage: metadata.tokenUsage
+              })
             }
           // 调试：打印所有事件类型（包括常见类型）
             logger.debug( 'Kiro Event: ' + (eventType || 'unknown') + ' ' + JSON.stringify(event).slice(0, 500))
-            // 处理 meteringEvent
+            // 处理 meteringEvent — 全自实现计费模式下忽略上游 credits
             if (eventType === 'meteringEvent' || event.meteringEvent) {
               const metering = event.meteringEvent || event
               if (metering.usage && typeof metering.usage === 'number') {
-                usage.credits += metering.usage
-                logger.debug(`meteringEvent - credit: ${metering.usage}, total: ${usage.credits}`)
+                logger.debug(`meteringEvent ignored in self-billing mode: ${metering.usage}`)
               }
             }
 
@@ -733,9 +712,8 @@ async function parseEventStream(
               if (reasoning.text) {
                 // 传递 isThinking=true 标记这是思考内容
                 onChunk(reasoning.text, undefined, true)
-                totalOutputChars += reasoning.text.length
-                // 累计 reasoning tokens（约 3 字符 = 1 token）
-                usage.reasoningTokens += Math.max(1, Math.round(reasoning.text.length / 3))
+                // 累积到输出文本（用于自计算 output tokens）
+                allOutputText += reasoning.text
               }
             }
 
@@ -750,7 +728,8 @@ async function parseEventStream(
                     return `- [${title}](${link.url})`
                   })
                 if (links.length > 0) {
-                  onChunk(`\n\n🔗 **Web References:**\n${links.join('\n')}`)
+                  const linkText = `\n\n🔗 **Web References:**\n${links.join('\n')}`
+                  onChunk(linkText)
                 }
               }
             }
@@ -781,7 +760,8 @@ async function parseEventStream(
                     return parts.join(', ')
                   })
                 if (refTexts.length > 0) {
-                  onChunk(`\n\n📚 **Code References:**\n${refTexts.join('\n')}`)
+                  const refText = `\n\n📚 **Code References:**\n${refTexts.join('\n')}`
+                  onChunk(refText)
                 }
               }
             }
@@ -793,7 +773,8 @@ async function parseEventStream(
                 const prompt = followup.followupPrompt
                 if (prompt.content || prompt.userIntent) {
                   const suggestion = prompt.content || prompt.userIntent
-                  onChunk(`\n\n💡 **Suggested follow-up:** ${suggestion}`)
+                  const followUpText = `\n\n💡 **Suggested follow-up:** ${suggestion}`
+                  onChunk(followUpText)
                 }
               }
             }
@@ -811,7 +792,8 @@ async function parseEventStream(
                     return parts.join(' ')
                   })
                 if (citationTexts.length > 0) {
-                  onChunk(`\n\n📖 **Citations:**\n${citationTexts.join('\n')}`)
+                  const citationText = `\n\n📖 **Citations:**\n${citationTexts.join('\n')}`
+                  onChunk(citationText)
                 }
               }
             }
@@ -834,7 +816,8 @@ async function parseEventStream(
               const reason = invalid.reason || 'UNKNOWN'
               const message = invalid.message || 'Invalid state detected'
               logger.error(`invalidStateEvent: ${reason} - ${message}`)
-              onChunk(`\n\n⚠️ **Warning:** ${message} (reason: ${reason})`)
+              const warnText = `\n\n⚠️ **Warning:** ${message} (reason: ${reason})`
+              onChunk(warnText)
             }
 
             // 处理错误
@@ -875,13 +858,18 @@ async function parseEventStream(
         name: currentToolUse.name,
         input: finalInput
       })
+
+      // 累积未完成 tool use 的输出到 allOutputText
+      allOutputText += currentToolUse.name + JSON.stringify(finalInput)
     }
 
-    if (usage.outputTokens === 0 && totalOutputChars > 0) {
-      usage.outputTokens = Math.max(1, Math.round(totalOutputChars / 3))
-    }
+    // 自计算 output tokens（用 tiktoken 而非依赖 API 返回）
+    const selfOutputTokens = countTokens(allOutputText)
 
-    onComplete(usage)
+    onComplete({
+      outputTokens: selfOutputTokens,
+      credits: 0
+    })
   } catch (error) {
     onError(error as Error)
   } finally {
@@ -898,7 +886,7 @@ export async function callKiroApiStream(
   account: ProxyAccount,
   payload: KiroPayload,
   onChunk: (text: string, toolUse?: KiroToolUse, isThinking?: boolean) => void,
-  onComplete: (usage: { inputTokens: number; outputTokens: number; credits: number; cacheReadTokens?: number; cacheWriteTokens?: number; reasoningTokens?: number }) => void,
+  onComplete: (usage: { outputTokens: number; credits: number }) => void,
   onError: (error: Error) => void,
   signal?: AbortSignal,
   preferredEndpoint?: 'codewhisperer' | 'amazonq',
@@ -947,8 +935,7 @@ export async function callKiroApiStream(
       }
       console.log(`[Response] status=${response.status} ok=${response.ok}`)
 
-      const inputChars = payloadStr.length
-      await parseEventStream(response.body!, onChunk, onComplete, onError, inputChars)
+      await parseEventStream(response.body!, onChunk, onComplete, onError)
       return
     } catch (error) {
       lastError = error as Error
@@ -969,7 +956,8 @@ export async function callKiroApiStream(
 
 /**
  * 非流式调用（等待完整响应）
- * 返回包含 cache tokens 的完整 usage 信息
+ * usage 仅返回自计算的 outputTokens；credits 在自计费模式下固定为 0
+ * inputTokens 由调用方（proxyServer）使用 countAllTokens() 自行计算
  */
 export async function callKiroApi(
   account: ProxyAccount,
@@ -979,25 +967,13 @@ export async function callKiroApi(
   content: string
   toolUses: KiroToolUse[]
   usage: {
-    inputTokens: number
     outputTokens: number
     credits: number
-    cacheReadTokens?: number
-    cacheWriteTokens?: number
-    reasoningTokens?: number
   }
 }> {
   return new Promise((resolve, reject) => {
     let content = ''
     const toolUses: KiroToolUse[] = []
-    let usage = {
-      inputTokens: 0,
-      outputTokens: 0,
-      credits: 0,
-      cacheReadTokens: 0,
-      cacheWriteTokens: 0,
-      reasoningTokens: 0
-    }
 
     callKiroApiStream(
       account,
@@ -1009,16 +985,16 @@ export async function callKiroApi(
         }
       },
       (u) => {
-        // 保留所有 usage 字段，包括 cache tokens
-        usage = {
-          inputTokens: u.inputTokens,
-          outputTokens: u.outputTokens,
-          credits: u.credits,
-          cacheReadTokens: u.cacheReadTokens || 0,
-          cacheWriteTokens: u.cacheWriteTokens || 0,
-          reasoningTokens: u.reasoningTokens || 0
-        }
-        resolve({ content, toolUses, usage })
+        // outputTokens 已在 parseEventStream 中用 tiktoken 自计算
+        // credits 在自计费模式下固定为 0（仅保留字段兼容）
+        resolve({
+          content,
+          toolUses,
+          usage: {
+            outputTokens: u.outputTokens,
+            credits: u.credits
+          }
+        })
       },
       reject,
       signal

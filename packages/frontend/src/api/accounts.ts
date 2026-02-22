@@ -80,6 +80,22 @@ export async function getAccountUsage(id: string): Promise<UsageLimitsResponse> 
 }
 
 /**
+ * 暂停账号调度
+ */
+export async function pauseAccount(id: string): Promise<{ id: string; status: string }> {
+  const response = await apiClient.post<ApiResponse<{ id: string; status: string }>>(`/accounts/${id}/pause`)
+  return response.data.data!
+}
+
+/**
+ * 恢复账号调度
+ */
+export async function resumeAccount(id: string): Promise<{ id: string; status: string }> {
+  const response = await apiClient.post<ApiResponse<{ id: string; status: string }>>(`/accounts/${id}/resume`)
+  return response.data.data!
+}
+
+/**
  * 批量获取所有账号使用量
  */
 export async function getAllAccountsUsage(): Promise<AccountUsage[]> {

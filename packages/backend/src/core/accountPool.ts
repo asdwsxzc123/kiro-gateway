@@ -6,6 +6,8 @@
 
 import type { ProxyAccount } from './types.js'
 
+export type AccountStatus = 'active' | 'paused' | 'error_suspended'
+
 export interface AccountPoolStats {
   id: string
   requests: number
@@ -13,7 +15,6 @@ export interface AccountPoolStats {
   errors: number
   quotaErrors: number
   lastUsed: number
-  isAvailable: boolean
   needsRefresh: boolean
 }
 
@@ -24,9 +25,20 @@ export class AccountPool {
   private accountOrder: string[] = []
 
   /**
+   * 检查账号是否处于 active 状态（可参与调度）
+   */
+  private isActive(account: ProxyAccount): boolean {
+    return !account.status || account.status === 'active'
+  }
+
+  /**
    * 添加账号到池中
    */
   addAccount(account: ProxyAccount): void {
+    // 确保新加入的账号有默认 status
+    if (!account.status) {
+      account.status = 'active'
+    }
     this.accounts.set(account.id, account)
     this.accountStats.set(account.id, {
       id: account.id,
@@ -35,7 +47,6 @@ export class AccountPool {
       errors: 0,
       quotaErrors: 0,
       lastUsed: 0,
-      isAvailable: true,
       needsRefresh: false
     })
     this.accountOrder.push(account.id)
@@ -107,8 +118,8 @@ export class AccountPool {
       this.currentIndex = (this.currentIndex + 1) % this.accountOrder.length
 
       if (account && stats) {
-        // 检查是否可用
-        if (!stats.isAvailable) {
+        // 检查调度状态（paused / error_suspended 不参与调度）
+        if (!this.isActive(account)) {
           attempts++
           continue
         }
@@ -151,7 +162,7 @@ export class AccountPool {
       const stats = this.accountStats.get(id)
 
       if (account && stats) {
-        if (!stats.isAvailable) continue
+        if (!this.isActive(account)) continue
         if (account.cooldownUntil && account.cooldownUntil > now) continue
         if (stats.needsRefresh) continue
 
@@ -171,7 +182,6 @@ export class AccountPool {
       stats.requests++
       stats.tokens += tokens
       stats.lastUsed = Date.now()
-      stats.isAvailable = true
       // 成功后重置错误计数
       stats.errors = 0
       stats.quotaErrors = 0
@@ -181,6 +191,10 @@ export class AccountPool {
     if (account) {
       account.lastUsed = Date.now()
       account.requestCount = (account.requestCount || 0) + 1
+      // 仅从 error_suspended 自动恢复，手动 paused 不自动恢复
+      if (account.status === 'error_suspended') {
+        account.status = 'active'
+      }
     }
   }
 
@@ -200,9 +214,13 @@ export class AccountPool {
         }
       }
 
-      // 连续错误过多，标记为不可用
+      // 连续错误过多，自动挂起
       if (stats.errors >= 3) {
-        stats.isAvailable = false
+        const account = this.accounts.get(id)
+        if (account && account.status !== 'paused') {
+          // 仅非手动暂停的账号才自动挂起
+          account.status = 'error_suspended'
+        }
       }
     }
 
@@ -233,20 +251,20 @@ export class AccountPool {
   }
 
   /**
-   * 设置账号可用状态
+   * 设置账号调度状态
    */
-  setAvailable(id: string, available: boolean): void {
-    const stats = this.accountStats.get(id)
-    if (stats) {
-      stats.isAvailable = available
-      if (available) {
-        stats.errors = 0
-      }
-    }
-
+  setStatus(id: string, status: AccountStatus): void {
     const account = this.accounts.get(id)
     if (account) {
-      account.isAvailable = available
+      account.status = status
+    }
+
+    // 恢复到 active 时重置错误计数
+    if (status === 'active') {
+      const stats = this.accountStats.get(id)
+      if (stats) {
+        stats.errors = 0
+      }
     }
   }
 
@@ -282,18 +300,18 @@ export class AccountPool {
   }
 
   /**
-   * 可用账号数量
+   * 可用账号数量（status=active 且不在 cooldown/refresh 中）
    */
   get availableCount(): number {
     const now = Date.now()
     let count = 0
 
     for (const [id, stats] of this.accountStats) {
-      if (!stats.isAvailable) continue
       if (stats.needsRefresh) continue
 
       const account = this.accounts.get(id)
-      if (account?.cooldownUntil && account.cooldownUntil > now) continue
+      if (!account || !this.isActive(account)) continue
+      if (account.cooldownUntil && account.cooldownUntil > now) continue
 
       count++
     }
@@ -316,7 +334,7 @@ export class AccountPool {
       const stats = this.accountStats.get(id)
 
       if (!account || !stats) continue
-      if (!stats.isAvailable) continue
+      if (!this.isActive(account)) continue
       if (stats.needsRefresh) continue
       if (account.cooldownUntil && account.cooldownUntil > now) continue
 
@@ -329,7 +347,7 @@ export class AccountPool {
 
   /**
    * 如果指定账号可用则返回，否则返回 null（由调用方 fallback 到轮询）
-   * 检查条件：账号存在 + isAvailable + 不在 cooldown 期 + 不需要 refresh
+   * 检查条件：账号存在 + status=active + 不在 cooldown 期 + 不需要 refresh
    */
   getAccountIfAvailable(id: string): ProxyAccount | null {
     const account = this.accounts.get(id)
@@ -338,7 +356,7 @@ export class AccountPool {
     const stats = this.accountStats.get(id)
     if (!stats) return null
 
-    if (!stats.isAvailable) return null
+    if (!this.isActive(account)) return null
     if (stats.needsRefresh) return null
 
     const now = Date.now()
@@ -369,9 +387,13 @@ export class AccountPool {
         errors: 0,
         quotaErrors: 0,
         lastUsed: 0,
-        isAvailable: true,
         needsRefresh: false
       })
+      // 重置统计时恢复所有非手动暂停的账号
+      const account = this.accounts.get(id)
+      if (account && account.status === 'error_suspended') {
+        account.status = 'active'
+      }
     }
   }
 }
