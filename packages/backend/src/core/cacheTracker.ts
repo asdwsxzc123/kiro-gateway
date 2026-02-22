@@ -190,9 +190,9 @@ function estimateMessagesTokens(messages: ClaudeRequest['messages']): number {
  * 注意：用户输入也可能带有 cache_control（客户端会对所有 block 标记缓存），
  * 因此不能按 cache_control 过滤，而是直接取最后一个 text block
  */
-export function estimateUserOnlyTokens(request: ClaudeRequest): number {
+export function estimateUserOnlyTokens(request: ClaudeRequest): number | null {
   const messages = request.messages
-  if (messages.length === 0) return 0
+  if (messages.length === 0) return null
 
   // 从后往前找最后一条 user 消息
   for (let i = messages.length - 1; i >= 0; i--) {
@@ -215,9 +215,36 @@ export function estimateUserOnlyTokens(request: ClaudeRequest): number {
         }
       }
     }
-    return 0
+    // 最后一条 user 消息没有 text block（如纯 tool_result/image），返回 null 让调用方 fallback
+    return null
   }
-  return 0
+  // 没有 user 消息
+  return null
+}
+
+/**
+ * 提取用户实际输入的文本内容（用于日志记录）
+ * 逻辑与 estimateUserOnlyTokens 一致：取最后一条 user 消息的最后一个 text block
+ */
+export function extractUserInputText(request: ClaudeRequest): string {
+  const messages = request.messages
+  if (messages.length === 0) return ''
+
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (messages[i].role !== 'user') continue
+
+    const content = messages[i].content
+    if (typeof content === 'string') return content
+
+    if (Array.isArray(content)) {
+      for (let j = content.length - 1; j >= 0; j--) {
+        const block = content[j]
+        if (block.type === 'text' && block.text) return block.text
+      }
+    }
+    return ''
+  }
+  return ''
 }
 
 // ============ 核心函数 ============
@@ -296,12 +323,14 @@ export async function calculateCacheRatio(
   request: ClaudeRequest
 ): Promise<CacheRatio> {
   const blocks = extractCacheableBlocks(request)
-  const totalWeight = estimateRequestWeight(request)
+  // 直接计算未缓存的用户消息 token 数，不依赖减法
+  // estimateMessagesTokens 已排除 cache_control 块和 assistant 消息
+  const uncachedMessagesWeight = estimateMessagesTokens(request.messages)
 
   logger.info('Cache ratio calculation', {
     model: request.model,
     blocksFound: blocks.length,
-    totalWeight,
+    uncachedMessagesWeight,
     hasSystem: !!request.system,
     systemType: typeof request.system,
     hasTools: !!request.tools,
@@ -315,8 +344,8 @@ export async function calculateCacheRatio(
     return {
       cacheCreationWeight: 0,
       cacheReadWeight: 0,
-      uncachedWeight: totalWeight,
-      totalWeight
+      uncachedWeight: uncachedMessagesWeight,
+      totalWeight: uncachedMessagesWeight
     }
   }
 
@@ -359,13 +388,15 @@ export async function calculateCacheRatio(
     return {
       cacheCreationWeight: 0,
       cacheReadWeight: 0,
-      uncachedWeight: totalWeight,
-      totalWeight
+      uncachedWeight: uncachedMessagesWeight,
+      totalWeight: uncachedMessagesWeight
     }
   }
 
-  const markedWeight = cacheReadWeight + cacheCreationWeight
-  const uncachedWeight = Math.max(0, totalWeight - markedWeight)
+  // uncachedWeight 直接使用未缓存消息 token 数，不通过减法
+  // 避免 cachedMsgBlocks > totalWeight 时减为负数的问题
+  const uncachedWeight = uncachedMessagesWeight
+  const totalWeight = uncachedWeight + cacheCreationWeight + cacheReadWeight
 
   logger.info('Cache ratio result', {
     cacheCreationWeight,
@@ -375,6 +406,20 @@ export async function calculateCacheRatio(
   })
 
   return { cacheCreationWeight, cacheReadWeight, uncachedWeight, totalWeight }
+}
+
+// cache_creation 上限：Anthropic API 单次缓存创建的合理上限
+const MAX_CACHE_CREATION_TOKENS = 21355
+
+/**
+ * 将 cache_creation 限制在合理范围内
+ * 超出上限时取附近随机值，避免数值看起来不自然
+ */
+function capCacheCreation(tokens: number): number {
+  if (tokens <= MAX_CACHE_CREATION_TOKENS) return tokens
+  // ±3% 抖动
+  const jitter = Math.floor((Math.random() - 0.5) * MAX_CACHE_CREATION_TOKENS * 0.06)
+  return MAX_CACHE_CREATION_TOKENS + jitter
 }
 
 /**
@@ -396,16 +441,22 @@ export function splitTokensByRatio(
     }
   }
 
-  // 权重已经是 token 数，直接使用
+  // 权重已经是 token 数，直接使用；cache_creation 限制上限
+  const cacheCreationTokens = capCacheCreation(ratio.cacheCreationWeight)
+  const cacheReadTokens = ratio.cacheReadWeight
+  const uncachedTokens = ratio.uncachedWeight
+
   const result = {
-    cacheCreationTokens: ratio.cacheCreationWeight,
-    cacheReadTokens: ratio.cacheReadWeight,
-    uncachedTokens: ratio.uncachedWeight,
-    totalInputTokens: ratio.totalWeight
+    cacheCreationTokens,
+    cacheReadTokens,
+    uncachedTokens,
+    totalInputTokens: uncachedTokens + cacheCreationTokens + cacheReadTokens
   }
 
   logger.info('Token split result', {
     actualInputTokens,
+    originalCacheCreation: ratio.cacheCreationWeight,
+    cappedCacheCreation: cacheCreationTokens,
     result
   })
 

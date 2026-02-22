@@ -429,7 +429,10 @@ upgrade() {
     log_step "Pulling latest images..."
     $COMPOSE_CMD pull
 
-    log_step "Restarting services..."
+    log_step "Stopping and removing old containers..."
+    $COMPOSE_CMD down
+
+    log_step "Starting new containers..."
     $COMPOSE_CMD up -d
 
     echo ""

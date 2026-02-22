@@ -530,13 +530,15 @@ interface ToolUseState {
 async function parseEventStream(
   body: ReadableStream<Uint8Array>,
   onChunk: (text: string, toolUse?: KiroToolUse, isThinking?: boolean) => void,
-  onComplete: (usage: { outputTokens: number; credits: number }) => void,
+  onComplete: (usage: { outputTokens: number; credits: number; kiroCredits: number }) => void,
   onError: (error: Error) => void
 ): Promise<void> {
   const reader = body.getReader()
   let buffer = new Uint8Array(0)
   // 自计算 token：仅累积模型原生输出（assistant/reasoning/tool_use），不含网关拼接文本
   let allOutputText = ''
+  // Kiro 上游实际消耗的积分（来自 meteringEvent）
+  let kiroCredits = 0
 
   let currentToolUse: ToolUseState | null = null
   const processedIds = new Set<string>()
@@ -695,20 +697,32 @@ async function parseEventStream(
               }
             }
 
-            // 处理 messageMetadataEvent — 全自实现计费模式下仅记录日志，不读取 token/credits
+            // 处理 messageMetadataEvent — 提取 Kiro 上游积分
             if (eventType === 'messageMetadataEvent' || event.messageMetadataEvent) {
               const metadata = event.messageMetadataEvent || event
-              logger.debug('messageMetadataEvent received (token 自计算，忽略 API 返回的 tokenUsage)', {
-                tokenUsage: metadata.tokenUsage
+              logger.debug('messageMetadataEvent received', {
+                tokenUsage: metadata.tokenUsage,
+                usage: metadata.usage,
+                raw: JSON.stringify(metadata).slice(0, 500)
               })
+              // 尝试从 messageMetadataEvent 中提取积分
+              // Kiro API 可能将积分放在 usage.credits / usage / tokenUsage.credits 等字段
+              const credits = metadata.usage?.credits
+                ?? metadata.credits
+                ?? metadata.tokenUsage?.credits
+              if (credits != null && typeof credits === 'number' && credits > 0) {
+                kiroCredits += credits
+                logger.info(`messageMetadataEvent credits: ${credits}, total kiroCredits=${kiroCredits}`)
+              }
             }
           // 调试：打印所有事件类型（包括常见类型）
             logger.debug( 'Kiro Event: ' + (eventType || 'unknown') + ' ' + JSON.stringify(event).slice(0, 500))
-            // 处理 meteringEvent — 全自实现计费模式下忽略上游 credits
+            // 处理 meteringEvent — 记录 Kiro 上游实际消耗的积分
             if (eventType === 'meteringEvent' || event.meteringEvent) {
               const metering = event.meteringEvent || event
               if (metering.usage && typeof metering.usage === 'number') {
-                logger.debug(`meteringEvent ignored in self-billing mode: ${metering.usage}`)
+                kiroCredits += metering.usage
+                logger.debug(`meteringEvent: kiroCredits=${metering.usage}, total=${kiroCredits}`)
               }
             }
 
@@ -874,7 +888,8 @@ async function parseEventStream(
 
     onComplete({
       outputTokens: selfOutputTokens,
-      credits: 0
+      credits: 0,
+      kiroCredits
     })
   } catch (error) {
     onError(error as Error)
@@ -892,7 +907,7 @@ export async function callKiroApiStream(
   account: ProxyAccount,
   payload: KiroPayload,
   onChunk: (text: string, toolUse?: KiroToolUse, isThinking?: boolean) => void,
-  onComplete: (usage: { outputTokens: number; credits: number }) => void,
+  onComplete: (usage: { outputTokens: number; credits: number; kiroCredits: number }) => void,
   onError: (error: Error) => void,
   signal?: AbortSignal,
   preferredEndpoint?: 'codewhisperer' | 'amazonq',
@@ -976,6 +991,7 @@ export async function callKiroApi(
   usage: {
     outputTokens: number
     credits: number
+    kiroCredits: number
   }
 }> {
   return new Promise((resolve, reject) => {
@@ -999,7 +1015,8 @@ export async function callKiroApi(
           toolUses,
           usage: {
             outputTokens: u.outputTokens,
-            credits: u.credits
+            credits: u.credits,
+            kiroCredits: u.kiroCredits
           }
         })
       },

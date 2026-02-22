@@ -18,6 +18,9 @@ const SYSTEM_LOGS_STREAM = 'logs:system'
 const MAX_REQUEST_LOGS = 100000
 const MAX_SYSTEM_LOGS = 50000
 
+// 日志保留时间（5 天，毫秒）
+const LOG_RETENTION_MS = 5 * 24 * 60 * 60 * 1000
+
 /**
  * 添加请求日志
  */
@@ -56,6 +59,16 @@ export async function addRequestLog(log: Omit<RequestLog, 'id'>): Promise<string
     if (log.cost !== undefined) {
       entry.cost = String(log.cost)
     }
+    if (log.kiroCredits !== undefined) {
+      entry.kiroCredits = String(log.kiroCredits)
+    }
+    if (log.auxiliary) {
+      entry.auxiliary = 'true'
+    }
+    if (log.userInput) {
+      // 截断到 500 字符，避免 Redis 存储过大
+      entry.userInput = log.userInput.length > 500 ? log.userInput.substring(0, 500) + '...' : log.userInput
+    }
 
     // 将对象展开为键值对数组
     const args: string[] = []
@@ -67,6 +80,10 @@ export async function addRequestLog(log: Omit<RequestLog, 'id'>): Promise<string
 
     // 限制日志数量
     await redis.xtrim(REQUEST_LOGS_STREAM, 'MAXLEN', '~', MAX_REQUEST_LOGS)
+
+    // 清理超过 5 天的日志（Redis Stream ID 基于时间戳）
+    const minId = Date.now() - LOG_RETENTION_MS
+    await redis.xtrim(REQUEST_LOGS_STREAM, 'MINID', '~', minId)
 
     return id
   } catch (error) {
@@ -119,12 +136,15 @@ export async function getRequestLogs(
         inputTokens: parseInt(record.inputTokens, 10),
         outputTokens: parseInt(record.outputTokens, 10),
         credits: record.credits ? parseFloat(record.credits) : undefined,
+        kiroCredits: record.kiroCredits ? parseFloat(record.kiroCredits) : undefined,
         cacheCreationTokens: record.cacheCreationTokens ? parseInt(record.cacheCreationTokens, 10) : undefined,
         cacheReadTokens: record.cacheReadTokens ? parseInt(record.cacheReadTokens, 10) : undefined,
         cost: record.cost ? parseFloat(record.cost) : undefined,
         responseTime: parseInt(record.responseTime, 10),
         success: record.success === 'true',
-        error: record.error
+        error: record.error,
+        auxiliary: record.auxiliary === 'true' || undefined,
+        userInput: record.userInput
       }
     })
 
@@ -178,6 +198,10 @@ export async function addSystemLog(log: Omit<SystemLog, 'id'>): Promise<string> 
 
     // 限制日志数量
     await redis.xtrim(SYSTEM_LOGS_STREAM, 'MAXLEN', '~', MAX_SYSTEM_LOGS)
+
+    // 清理超过 5 天的日志
+    const minId = Date.now() - LOG_RETENTION_MS
+    await redis.xtrim(SYSTEM_LOGS_STREAM, 'MINID', '~', minId)
 
     return id
   } catch (error) {

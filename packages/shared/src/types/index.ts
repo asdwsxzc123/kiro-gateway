@@ -163,12 +163,18 @@ export interface RequestLog {
   inputTokens: number;
   outputTokens: number;
   credits?: number;
+  /** Kiro 上游实际消耗的积分 */
+  kiroCredits?: number;
   cacheCreationTokens?: number;
   cacheReadTokens?: number;
   cost?: number;
   responseTime: number;
   success: boolean;
   error?: string;
+  /** 辅助请求标记 */
+  auxiliary?: boolean;
+  /** 用户实际输入内容 */
+  userInput?: string;
 }
 
 export interface SystemLog {
