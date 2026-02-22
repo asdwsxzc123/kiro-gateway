@@ -1,6 +1,6 @@
 /**
  * 账号管理路由
- * 提供账号的增删改查、Token 刷新、连通性测试等接口
+ * 提供账号的增删改查、Token 刷新、连通性测试、暂停/恢复等接口
  */
 
 import { Router, Request, Response } from 'express'
@@ -36,6 +36,104 @@ router.get('/usage/all', async (_req: Request, res: Response) => {
 })
 
 /**
+ * 批量暂停账号调度
+ * POST /api/accounts/batch/pause
+ */
+router.post('/batch/pause', async (req: Request, res: Response) => {
+  try {
+    const { accountIds } = req.body as { accountIds: string[] }
+
+    if (!accountIds || !Array.isArray(accountIds) || accountIds.length === 0) {
+      res.status(400).json({
+        success: false,
+        error: { message: 'accountIds array is required' }
+      } as ApiResponse)
+      return
+    }
+
+    const updated = await accountService.batchPauseAccounts(accountIds)
+    await refreshProxyServerAccounts()
+
+    res.json({
+      success: true,
+      data: { updated }
+    } as ApiResponse)
+  } catch (error) {
+    logger.error('Failed to batch pause accounts', { error: (error as Error).message })
+    res.status(500).json({
+      success: false,
+      error: { message: (error as Error).message }
+    } as ApiResponse)
+  }
+})
+
+/**
+ * 批量恢复账号调度
+ * POST /api/accounts/batch/resume
+ */
+router.post('/batch/resume', async (req: Request, res: Response) => {
+  try {
+    const { accountIds } = req.body as { accountIds: string[] }
+
+    if (!accountIds || !Array.isArray(accountIds) || accountIds.length === 0) {
+      res.status(400).json({
+        success: false,
+        error: { message: 'accountIds array is required' }
+      } as ApiResponse)
+      return
+    }
+
+    const updated = await accountService.batchResumeAccounts(accountIds)
+    await refreshProxyServerAccounts()
+
+    res.json({
+      success: true,
+      data: { updated }
+    } as ApiResponse)
+  } catch (error) {
+    logger.error('Failed to batch resume accounts', { error: (error as Error).message })
+    res.status(500).json({
+      success: false,
+      error: { message: (error as Error).message }
+    } as ApiResponse)
+  }
+})
+
+/**
+ * 批量导入账号
+ * POST /api/accounts/batch/import
+ */
+router.post('/batch/import', async (req: Request, res: Response) => {
+  try {
+    const accounts = req.body.accounts as AddAccountRequest[]
+
+    if (!accounts || !Array.isArray(accounts)) {
+      res.status(400).json({
+        success: false,
+        error: { message: 'accounts array is required' }
+      } as ApiResponse)
+      return
+    }
+
+    const result = await accountService.batchImportAccounts(accounts)
+
+    // Bug fix: 批量导入后同步内存号池
+    await refreshProxyServerAccounts()
+
+    res.json({
+      success: true,
+      data: result
+    } as ApiResponse)
+  } catch (error) {
+    logger.error('Failed to batch import', { error: (error as Error).message })
+    res.status(500).json({
+      success: false,
+      error: { message: (error as Error).message }
+    } as ApiResponse)
+  }
+})
+
+/**
  * 获取所有账号
  * GET /api/accounts
  */
@@ -53,7 +151,7 @@ router.get('/', async (_req: Request, res: Response) => {
       region: acc.region,
       machineId: acc.machineId,
       machineIdCreatedAt: acc.machineIdCreatedAt,
-      isAvailable: acc.isAvailable,
+      status: acc.status || 'active',
       errorCount: acc.errorCount,
       requestCount: acc.requestCount,
       lastUsed: acc.lastUsed,
@@ -104,7 +202,7 @@ router.get('/:id', async (req: Request, res: Response) => {
       profileArn: account.profileArn,
       machineId: account.machineId,
       machineIdCreatedAt: account.machineIdCreatedAt,
-      isAvailable: account.isAvailable,
+      status: account.status || 'active',
       errorCount: account.errorCount,
       requestCount: account.requestCount,
       lastUsed: account.lastUsed,
@@ -131,15 +229,10 @@ router.post('/', async (req: Request, res: Response) => {
   try {
     const request = req.body as AddAccountRequest
 
-    // if (!request.accessToken) {
-    //   res.status(400).json({
-    //     success: false,
-    //     error: { message: 'accessToken is required' }
-    //   } as ApiResponse)
-    //   return
-    // }
-
     const account = await accountService.addAccount(request)
+
+    // Bug fix: 新增账号后同步内存号池
+    await refreshProxyServerAccounts()
 
     res.status(201).json({
       success: true,
@@ -149,7 +242,7 @@ router.post('/', async (req: Request, res: Response) => {
         authMethod: account.authMethod,
         provider: account.provider,
         machineId: account.machineId,
-        isAvailable: account.isAvailable,
+        status: account.status || 'active',
         createdAt: account.createdAt
       }
     } as ApiResponse)
@@ -180,13 +273,16 @@ router.put('/:id', async (req: Request, res: Response) => {
       return
     }
 
+    // Bug fix: 更新账号后同步内存号池
+    await refreshProxyServerAccounts()
+
     res.json({
       success: true,
       data: {
         id: account.id,
         email: account.email,
         machineId: account.machineId,
-        isAvailable: account.isAvailable
+        status: account.status || 'active'
       }
     } as ApiResponse)
   } catch (error) {
@@ -229,6 +325,70 @@ router.delete('/:id', async (req: Request, res: Response) => {
 })
 
 /**
+ * 暂停账号调度
+ * POST /api/accounts/:id/pause
+ */
+router.post('/:id/pause', async (req: Request, res: Response) => {
+  try {
+    const id = req.params.id as string
+    const account = await accountService.pauseAccount(id)
+
+    if (!account) {
+      res.status(404).json({
+        success: false,
+        error: { message: 'Account not found' }
+      } as ApiResponse)
+      return
+    }
+
+    await refreshProxyServerAccounts()
+
+    res.json({
+      success: true,
+      data: { id: account.id, status: account.status }
+    } as ApiResponse)
+  } catch (error) {
+    logger.error('Failed to pause account', { error: (error as Error).message })
+    res.status(500).json({
+      success: false,
+      error: { message: (error as Error).message }
+    } as ApiResponse)
+  }
+})
+
+/**
+ * 恢复账号调度
+ * POST /api/accounts/:id/resume
+ */
+router.post('/:id/resume', async (req: Request, res: Response) => {
+  try {
+    const id = req.params.id as string
+    const account = await accountService.resumeAccount(id)
+
+    if (!account) {
+      res.status(404).json({
+        success: false,
+        error: { message: 'Account not found' }
+      } as ApiResponse)
+      return
+    }
+
+    await refreshProxyServerAccounts()
+
+    res.json({
+      success: true,
+      data: { id: account.id, status: account.status }
+    } as ApiResponse)
+  } catch (error) {
+    logger.error('Failed to resume account', { error: (error as Error).message })
+    res.status(500).json({
+      success: false,
+      error: { message: (error as Error).message }
+    } as ApiResponse)
+  }
+})
+
+/**
  * 刷新账号 Token
  * POST /api/accounts/:id/refresh
  */
@@ -244,6 +404,9 @@ router.post('/:id/refresh', async (req: Request, res: Response) => {
       } as ApiResponse)
       return
     }
+
+    // Bug fix: 刷新 Token 后同步内存号池
+    await refreshProxyServerAccounts()
 
     res.json({
       success: true,
@@ -301,6 +464,9 @@ router.post('/:id/regenerate-machine-id', async (req: Request, res: Response) =>
       return
     }
 
+    // Bug fix: 重新生成机器码后同步内存号池
+    await refreshProxyServerAccounts()
+
     res.json({
       success: true,
       data: {
@@ -311,37 +477,6 @@ router.post('/:id/regenerate-machine-id', async (req: Request, res: Response) =>
     } as ApiResponse)
   } catch (error) {
     logger.error('Failed to regenerate machine ID', { error: (error as Error).message })
-    res.status(500).json({
-      success: false,
-      error: { message: (error as Error).message }
-    } as ApiResponse)
-  }
-})
-
-/**
- * 批量导入账号
- * POST /api/accounts/batch/import
- */
-router.post('/batch/import', async (req: Request, res: Response) => {
-  try {
-    const accounts = req.body.accounts as AddAccountRequest[]
-
-    if (!accounts || !Array.isArray(accounts)) {
-      res.status(400).json({
-        success: false,
-        error: { message: 'accounts array is required' }
-      } as ApiResponse)
-      return
-    }
-
-    const result = await accountService.batchImportAccounts(accounts)
-
-    res.json({
-      success: true,
-      data: result
-    } as ApiResponse)
-  } catch (error) {
-    logger.error('Failed to batch import', { error: (error as Error).message })
     res.status(500).json({
       success: false,
       error: { message: (error as Error).message }

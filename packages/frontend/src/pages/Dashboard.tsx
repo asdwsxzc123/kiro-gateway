@@ -349,8 +349,10 @@ export function Dashboard() {
                 >
                   <div
                     className={`h-2 w-2 rounded-full ${
-                      account.isAvailable
+                      account.status === 'active'
                         ? "bg-green-500"
+                        : account.status === 'paused'
+                        ? "bg-yellow-500"
                         : "bg-red-500"
                     }`}
                   />
@@ -358,7 +360,7 @@ export function Dashboard() {
                     {account.email || account.id.slice(0, 8)}
                   </span>
                   <span className="ml-auto text-xs text-muted-foreground">
-                    {account.isAvailable ? "正常" : "不可用"}
+                    {account.status === 'active' ? "正常" : account.status === 'paused' ? "已暂停" : "异常挂起"}
                   </span>
                 </div>
               ))}

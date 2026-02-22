@@ -78,7 +78,7 @@ export interface Account {
   lastUsed?: number;
   requestCount?: number;
   errorCount?: number;
-  isAvailable?: boolean;
+  status?: 'active' | 'paused' | 'error_suspended';
   cooldownUntil?: number;
   createdAt?: number;
 }
@@ -251,6 +251,11 @@ export interface GatewayConfig {
   errorCooldownTime?: number;
   maxConsecutiveErrors?: number;
   quotaResetTime?: number;
+
+  // 账号自动停用规则
+  autoStopErrorCodes?: string;      // 逗号分隔的错误码，如 "429,403"
+  autoStopErrorPatterns?: string;    // 逗号分隔的错误消息匹配模式
+  quotaUsageThreshold?: number;      // 配额使用阈值百分比 (0-100)，0 表示不限制
 }
 
 export interface UpdateConfigRequest {
@@ -303,6 +308,11 @@ export interface UpdateConfigRequest {
   errorCooldownTime?: number;
   maxConsecutiveErrors?: number;
   quotaResetTime?: number;
+
+  // 账号自动停用规则
+  autoStopErrorCodes?: string;
+  autoStopErrorPatterns?: string;
+  quotaUsageThreshold?: number;
 }
 
 /**

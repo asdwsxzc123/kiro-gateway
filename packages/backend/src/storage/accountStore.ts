@@ -53,13 +53,22 @@ function deserializeAccount(data: Record<string, string>): ProxyAccount {
   for (const [key, value] of Object.entries(data)) {
     if (SENSITIVE_FIELDS.includes(key)) {
       (account as Record<string, unknown>)[key] = decrypt(value)
-    } else if (['isAvailable'].includes(key)) {
-      (account as Record<string, unknown>)[key] = value === 'true'
     } else if (['expiresAt', 'lastUsed', 'requestCount', 'errorCount', 'cooldownUntil', 'createdAt', 'machineIdCreatedAt'].includes(key)) {
       (account as Record<string, unknown>)[key] = parseInt(value, 10)
     } else {
       (account as Record<string, unknown>)[key] = value
     }
+  }
+
+  // 向后兼容：旧数据中 isAvailable 迁移为 status
+  const raw = account as Record<string, unknown>
+  if (raw.isAvailable !== undefined && !raw.status) {
+    account.status = raw.isAvailable === 'true' || raw.isAvailable === true ? 'active' : 'error_suspended'
+    delete raw.isAvailable
+  }
+  // 确保 status 有默认值
+  if (!account.status) {
+    account.status = 'active'
   }
 
   return account as ProxyAccount
@@ -154,7 +163,7 @@ export async function addAccount(request: AddAccountRequest): Promise<ProxyAccou
     profileArn: request.profileArn,
     machineId,
     machineIdCreatedAt: now,
-    isAvailable: true,
+    status: 'active',
     errorCount: 0,
     requestCount: 0,
     createdAt: now
@@ -205,9 +214,9 @@ export async function updateAccount(id: string, updates: UpdateAccountRequest): 
 
     await redis.hset(ACCOUNT_KEY + id, serialized)
 
-    // 更新可用状态索引
-    if (updates.isAvailable !== undefined) {
-      if (updates.isAvailable) {
+    // 更新可用状态索引（只有 active 才参与调度）
+    if (updates.status !== undefined) {
+      if (updates.status === 'active') {
         await redis.sadd(ACCOUNTS_AVAILABLE, id)
       } else {
         await redis.srem(ACCOUNTS_AVAILABLE, id)
@@ -274,9 +283,11 @@ export async function getAvailableAccounts(): Promise<ProxyAccount[]> {
       for (const [err, data] of results) {
         if (!err && data && typeof data === 'object' && Object.keys(data).length > 0) {
           const account = deserializeAccount(data as Record<string, string>)
-          // 检查是否在冷却期
-          if (!account.cooldownUntil || account.cooldownUntil < Date.now()) {
-            accounts.push(account)
+          // 仅加载 status=active 且不在冷却期的账号
+          if (account.status !== 'paused' && account.status !== 'error_suspended') {
+            if (!account.cooldownUntil || account.cooldownUntil < Date.now()) {
+              accounts.push(account)
+            }
           }
         }
       }

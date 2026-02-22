@@ -276,7 +276,7 @@ export class ProxyServer {
           expiresAt: result.expiresAt
         })
         this.accountPool.clearNeedsRefresh(account.id)
-        this.accountPool.setAvailable(account.id, true)
+        this.accountPool.setStatus(account.id, 'active')
         logger.info('Token refreshed successfully', { accountId: account.id })
         return true
       } else {

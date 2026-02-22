@@ -1,6 +1,6 @@
 import { useState } from "react"
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
-import { Plus, Trash2, RefreshCw, TestTube, Pencil, BarChart3, Fingerprint, ArrowUpDown } from "lucide-react"
+import { Plus, Trash2, RefreshCw, TestTube, Pencil, BarChart3, Fingerprint, ArrowUpDown, Pause, Play } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -47,6 +47,8 @@ import {
   testAccount,
   getAllAccountsUsage,
   regenerateMachineId,
+  pauseAccount,
+  resumeAccount,
 } from "@/api/accounts"
 import { getAllAccountsTodayCost } from "@/api/stats"
 import type { AddAccountRequest, Account, AccountUsage } from "@kiro-gateway/shared"
@@ -118,7 +120,7 @@ interface EditFormData {
   provider: string
   profileArn: string
   machineId: string
-  isAvailable: boolean
+  status: 'active' | 'paused' | 'error_suspended'
 }
 
 // 初始编辑表单数据
@@ -134,7 +136,7 @@ const initialEditForm: EditFormData = {
   provider: "",
   profileArn: "",
   machineId: "",
-  isAvailable: true,
+  status: 'active',
 }
 
 /**
@@ -155,6 +157,8 @@ export function Accounts() {
   const [oidcForm, setOidcForm] = useState<OidcFormData>(initialOidcForm)
   // SSO 表单数据
   const [ssoForm, setSsoForm] = useState<SsoFormData>(initialSsoForm)
+  // OIDC 批量粘贴输入
+  const [oidcBatchInput, setOidcBatchInput] = useState("")
   // 手动输入表单数据
   const [manualForm, setManualForm] = useState<AddAccountRequest>(initialManualForm)
   // 排序状态
@@ -289,6 +293,7 @@ export function Accounts() {
       setIsAddDialogOpen(false)
       // 重置所有表单
       setOidcForm(initialOidcForm)
+      setOidcBatchInput("")
       setSsoForm(initialSsoForm)
       setManualForm(initialManualForm)
       toast({ title: "添加成功", description: "账号已成功添加" })
@@ -372,6 +377,37 @@ export function Accounts() {
     },
   })
 
+  // 暂停/恢复账号
+  const pauseMutation = useMutation({
+    mutationFn: pauseAccount,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["accounts"] })
+      toast({ title: "操作成功", description: "账号已暂停调度" })
+    },
+    onError: (error: Error) => {
+      toast({
+        title: "暂停失败",
+        description: error.message,
+        variant: "destructive",
+      })
+    },
+  })
+
+  const resumeMutation = useMutation({
+    mutationFn: resumeAccount,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["accounts"] })
+      toast({ title: "操作成功", description: "账号已恢复调度" })
+    },
+    onError: (error: Error) => {
+      toast({
+        title: "恢复失败",
+        description: error.message,
+        variant: "destructive",
+      })
+    },
+  })
+
   // 更新账号
   const updateMutation = useMutation({
     mutationFn: ({ id, data }: { id: string; data: Partial<AddAccountRequest> }) =>
@@ -391,6 +427,51 @@ export function Accounts() {
       })
     },
   })
+
+  /**
+   * 解析 OIDC 批量粘贴的单行数据
+   * 格式: accessToken----refreshToken----clientId----clientSecret----region
+   */
+  const parseOidcBatchLine = (line: string): AddAccountRequest | null => {
+    const parts = line.split("----").map((p) => p.trim())
+    if (parts.length < 2) return null
+    return {
+      accessToken: parts[0] || "",
+      refreshToken: parts[1] || undefined,
+      clientId: parts[2] || undefined,
+      clientSecret: parts[3] || undefined,
+      region: parts[4] || "us-east-1",
+      authMethod: "idc",
+      provider: "Enterprise",
+    }
+  }
+
+  /**
+   * 处理 OIDC 批量粘贴输入变化
+   * 单行时自动填充表单字段
+   */
+  const handleOidcBatchChange = (text: string) => {
+    setOidcBatchInput(text)
+    const lines = text
+      .split("\n")
+      .map((l) => l.trim())
+      .filter((l) => l.length > 0)
+    // 单行时自动填充到表单
+    if (lines.length === 1) {
+      const parsed = parseOidcBatchLine(lines[0])
+      if (parsed) {
+        setOidcForm({
+          ...oidcForm,
+          authMethod: "idc",
+          provider: "Enterprise",
+          refreshToken: parsed.refreshToken || "",
+          clientId: parsed.clientId || "",
+          clientSecret: parsed.clientSecret || "",
+          region: parsed.region || "us-east-1",
+        })
+      }
+    }
+  }
 
   /**
    * 验证 OIDC 表单
@@ -443,7 +524,34 @@ export function Accounts() {
    */
   const handleAddAccount = async () => {
     if (importMode === "oidc") {
-      // OIDC 凭证模式
+      // 检查是否有批量粘贴内容
+      const batchLines = oidcBatchInput
+        .split("\n")
+        .map((l) => l.trim())
+        .filter((l) => l.length > 0 && l.includes("----"))
+
+      if (batchLines.length > 1) {
+        // 多行批量导入
+        let hasError = false
+        for (const line of batchLines) {
+          const parsed = parseOidcBatchLine(line)
+          if (parsed) {
+            addMutation.mutate(parsed)
+          } else {
+            hasError = true
+          }
+        }
+        if (hasError) {
+          toast({
+            title: "部分解析失败",
+            description: "存在格式不正确的行，已跳过",
+            variant: "destructive",
+          })
+        }
+        return
+      }
+
+      // 单账号 OIDC 凭证模式
       const error = validateOidcForm()
       if (error) {
         toast({ title: "请填写完整信息", description: error, variant: "destructive" })
@@ -523,7 +631,7 @@ export function Accounts() {
         provider: fullAccount.provider || "",
         profileArn: fullAccount.profileArn || "",
         machineId: fullAccount.machineId || "",
-        isAvailable: fullAccount.isAvailable ?? true,
+        status: fullAccount.status ?? 'active',
       })
 
       setIsEditDialogOpen(true)
@@ -565,6 +673,31 @@ export function Accounts() {
    */
   const renderOidcForm = () => (
     <div className="grid gap-4">
+      {/* 批量粘贴区域 */}
+      <div className="grid gap-2">
+        <Label htmlFor="oidc-batch">批量粘贴 (OIDC)</Label>
+        <textarea
+          id="oidc-batch"
+          className="flex min-h-[80px] w-full rounded-md border border-input bg-background px-3 py-2 text-sm font-mono ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
+          placeholder={"格式: accessToken----refreshToken----clientId----clientSecret----region\n支持多行批量导入，每行一个账号"}
+          value={oidcBatchInput}
+          onChange={(e) => handleOidcBatchChange(e.target.value)}
+        />
+        <p className="text-xs text-muted-foreground">
+          粘贴后单行自动填充下方表单，多行直接批量导入为 IDC 账号
+        </p>
+      </div>
+
+      {/* 分隔线 */}
+      <div className="relative">
+        <div className="absolute inset-0 flex items-center">
+          <span className="w-full border-t" />
+        </div>
+        <div className="relative flex justify-center text-xs uppercase">
+          <span className="bg-background px-2 text-muted-foreground">或手动填写</span>
+        </div>
+      </div>
+
       {/* 认证方式选择 */}
       <div className="grid gap-2">
         <Label htmlFor="oidc-authMethod">认证方式 *</Label>
@@ -1215,12 +1348,14 @@ export function Accounts() {
                     <TableCell>
                       <span
                         className={`inline-flex items-center rounded-full px-2 py-1 text-xs font-medium ${
-                          account.isAvailable
+                          account.status === 'active'
                             ? "bg-green-100 text-green-700"
+                            : account.status === 'paused'
+                            ? "bg-yellow-100 text-yellow-700"
                             : "bg-red-100 text-red-700"
                         }`}
                       >
-                        {account.isAvailable ? "正常" : "不可用"}
+                        {account.status === 'active' ? "正常" : account.status === 'paused' ? "已暂停" : "异常挂起"}
                       </span>
                     </TableCell>
                     <TableCell>
@@ -1237,6 +1372,28 @@ export function Accounts() {
                     </TableCell>
                     <TableCell className="text-right">
                       <div className="flex justify-end gap-2">
+                        {/* 暂停/恢复按钮 */}
+                        {account.status === 'active' ? (
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            onClick={() => pauseMutation.mutate(account.id)}
+                            disabled={pauseMutation.isPending}
+                            title="暂停账号"
+                          >
+                            <Pause className="h-4 w-4 text-yellow-600" />
+                          </Button>
+                        ) : (
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            onClick={() => resumeMutation.mutate(account.id)}
+                            disabled={resumeMutation.isPending}
+                            title="恢复账号"
+                          >
+                            <Play className="h-4 w-4 text-green-600" />
+                          </Button>
+                        )}
                         <Button
                           variant="ghost"
                           size="icon"

@@ -312,6 +312,9 @@ export function Settings() {
       errorCooldownTime: localConfig.errorCooldownTime ?? config?.errorCooldownTime,
       maxConsecutiveErrors: localConfig.maxConsecutiveErrors ?? config?.maxConsecutiveErrors,
       quotaResetTime: localConfig.quotaResetTime ?? config?.quotaResetTime,
+      autoStopErrorCodes: localConfig.autoStopErrorCodes ?? config?.autoStopErrorCodes,
+      autoStopErrorPatterns: localConfig.autoStopErrorPatterns ?? config?.autoStopErrorPatterns,
+      quotaUsageThreshold: localConfig.quotaUsageThreshold ?? config?.quotaUsageThreshold,
     })
   }
 
@@ -901,6 +904,74 @@ export function Settings() {
                   <p className="text-xs text-muted-foreground">
                     配额重置的时间间隔，默认 3600000 毫秒 (1小时)
                   </p>
+                </div>
+              </div>
+
+              {/* 自动停用规则 */}
+              <div className="border-t pt-6">
+                <h4 className="text-sm font-semibold mb-4">自动停用规则</h4>
+                <p className="text-sm text-muted-foreground mb-4">
+                  配置触发账号自动暂停的规则，匹配时账号将被自动暂停使用
+                </p>
+                <div className="grid gap-4 md:grid-cols-2">
+                  <div className="space-y-2">
+                    <Label htmlFor="autoStopErrorCodes">触发停用的错误码</Label>
+                    <Input
+                      id="autoStopErrorCodes"
+                      type="text"
+                      placeholder="例如：429,403"
+                      value={localConfig.autoStopErrorCodes ?? config?.autoStopErrorCodes ?? ""}
+                      onChange={(e) =>
+                        setLocalConfig({
+                          ...localConfig,
+                          autoStopErrorCodes: e.target.value,
+                        })
+                      }
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      逗号分隔的 HTTP 状态码，匹配时自动暂停账号
+                    </p>
+                  </div>
+
+                  <div className="space-y-2">
+                    <Label htmlFor="quotaUsageThreshold">配额使用阈值 (%)</Label>
+                    <Input
+                      id="quotaUsageThreshold"
+                      type="number"
+                      min={0}
+                      max={100}
+                      placeholder="0"
+                      value={localConfig.quotaUsageThreshold ?? config?.quotaUsageThreshold ?? 0}
+                      onChange={(e) =>
+                        setLocalConfig({
+                          ...localConfig,
+                          quotaUsageThreshold: parseInt(e.target.value) || 0,
+                        })
+                      }
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      配额使用达到此百分比时自动暂停，0 表示不限制
+                    </p>
+                  </div>
+
+                  <div className="space-y-2 md:col-span-2">
+                    <Label htmlFor="autoStopErrorPatterns">触发停用的错误消息</Label>
+                    <Input
+                      id="autoStopErrorPatterns"
+                      type="text"
+                      placeholder="例如：quota exceeded,rate limit"
+                      value={localConfig.autoStopErrorPatterns ?? config?.autoStopErrorPatterns ?? ""}
+                      onChange={(e) =>
+                        setLocalConfig({
+                          ...localConfig,
+                          autoStopErrorPatterns: e.target.value,
+                        })
+                      }
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      逗号分隔的错误消息匹配模式，包含任一模式时自动暂停账号（不区分大小写）
+                    </p>
+                  </div>
                 </div>
               </div>
 

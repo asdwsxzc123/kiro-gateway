@@ -69,7 +69,15 @@ export async function getGatewayConfig(): Promise<GatewayConfig> {
       preferredEndpoint: data.preferredEndpoint as GatewayConfig['preferredEndpoint'],
       rateLimitEnabled: data.rateLimitEnabled === 'true',
       rateLimitWindow: parseInt(data.rateLimitWindow, 10) || DEFAULT_CONFIG.rateLimitWindow,
-      rateLimitMax: parseInt(data.rateLimitMax, 10) || DEFAULT_CONFIG.rateLimitMax
+      rateLimitMax: parseInt(data.rateLimitMax, 10) || DEFAULT_CONFIG.rateLimitMax,
+      // 账号池配置（透传保存的值，确保 GET 时不丢失）
+      ...(data.errorCooldownTime && { errorCooldownTime: parseInt(data.errorCooldownTime, 10) }),
+      ...(data.maxConsecutiveErrors && { maxConsecutiveErrors: parseInt(data.maxConsecutiveErrors, 10) }),
+      ...(data.quotaResetTime && { quotaResetTime: parseInt(data.quotaResetTime, 10) }),
+      // 账号自动停用规则
+      ...(data.autoStopErrorCodes && { autoStopErrorCodes: data.autoStopErrorCodes }),
+      ...(data.autoStopErrorPatterns && { autoStopErrorPatterns: data.autoStopErrorPatterns }),
+      ...(data.quotaUsageThreshold && { quotaUsageThreshold: parseInt(data.quotaUsageThreshold, 10) }),
     }
   } catch (error) {
     logger.error('Failed to get gateway config', { error: (error as Error).message })
