@@ -12,6 +12,7 @@ import type { ClaudeRequest } from '../core/types.js'
 import * as accountStore from '../storage/accountStore.js'
 import * as configStore from '../storage/configStore.js'
 import { countAllTokens } from '../core/tokenCounter.js'
+import { findModelPrice } from '../core/pricing.js'
 
 const logger = createLogger('ProxyRoute')
 const router: IRouter = Router()
@@ -207,15 +208,26 @@ router.post('/messages/count_tokens', async (req: Request, res: Response) => {
  * GET /v1/models
  */
 router.get('/models', (_req: Request, res: Response) => {
-  const models = [
-    { id: 'claude-opus-4.6', object: 'model', owned_by: 'kiro' },
-    { id: 'claude-opus-4.6-1m', object: 'model', owned_by: 'kiro' },
-    { id: 'claude-sonnet-4.5', object: 'model', owned_by: 'kiro' },
-    { id: 'claude-sonnet-4', object: 'model', owned_by: 'kiro' },
-    { id: 'claude-haiku-4.5', object: 'model', owned_by: 'kiro' },
-    { id: 'claude-opus-4.6', object: 'model', owned_by: 'kiro' },
-    { id: 'claude-opus-4.5', object: 'model', owned_by: 'kiro' }
+  const modelIds = [
+    'claude-opus-4.6',
+    'claude-opus-4.6-1m',
+    'claude-sonnet-4.6',
+    'claude-sonnet-4.5',
+    'claude-sonnet-4',
+    'claude-haiku-4.5',
+    'claude-opus-4.5'
   ]
+
+  const models = modelIds.map(id => {
+    const price = findModelPrice(id)
+    return {
+      id,
+      object: 'model',
+      owned_by: 'kiro',
+      max_input_tokens: price.max_input_tokens,
+      max_output_tokens: price.max_output_tokens
+    }
+  })
 
   res.json({
     object: 'list',

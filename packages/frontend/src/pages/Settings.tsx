@@ -1,6 +1,6 @@
 import { useState } from "react"
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
-import { Copy, Plus, Trash2, Save, Lock, ArrowUpDown } from "lucide-react"
+import { Copy, Plus, Trash2, Save, Lock, ArrowUpDown, Send } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -38,7 +38,7 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { useToast } from "@/hooks/use-toast"
-import { getConfig, updateConfig, getApiKeys, createApiKey, updateApiKey, deleteApiKey } from "@/api/config"
+import { getConfig, updateConfig, getApiKeys, createApiKey, updateApiKey, deleteApiKey, testWebhook, getWebhookConfig, updateWebhookConfig } from "@/api/config"
 import { getAccounts } from "@/api/accounts"
 import { authApi } from "@/api/auth"
 import { getAllApiKeysTodayCost } from "@/api/stats"
@@ -59,6 +59,10 @@ export function Settings() {
   const [editBoundAccountIds, setEditBoundAccountIds] = useState<string[]>([])
   const [sortBy, setSortBy] = useState<"name" | "todayCost" | "totalCost">("name")
   const [sortOrder, setSortOrder] = useState<"asc" | "desc">("asc")
+
+  // Webhook 测试状态
+  const [testingWebhook, setTestingWebhook] = useState(false)
+  const [webhookConfig, setWebhookConfig] = useState<import("@kiro-gateway/shared").WebhookConfig | null>(null)
 
   // 修改密码状态
   const [oldPassword, setOldPassword] = useState("")
@@ -91,6 +95,12 @@ export function Settings() {
   const { data: accounts = [] } = useQuery({
     queryKey: ["accounts"],
     queryFn: getAccounts,
+  })
+
+  // 获取 Webhook 配置
+  const { data: webhookData } = useQuery({
+    queryKey: ["webhookConfig"],
+    queryFn: getWebhookConfig,
   })
 
   // 格式化费用显示
@@ -316,6 +326,45 @@ export function Settings() {
       autoStopErrorPatterns: localConfig.autoStopErrorPatterns ?? config?.autoStopErrorPatterns,
       quotaUsageThreshold: localConfig.quotaUsageThreshold ?? config?.quotaUsageThreshold,
     })
+  }
+
+  // 测试 Webhook
+  const handleTestWebhook = async () => {
+    setTestingWebhook(true)
+    try {
+      const results = await testWebhook()
+      const succeeded = results.filter(r => r.success).length
+      const failed = results.filter(r => !r.success).length
+      if (results.length === 0) {
+        toast({ title: "无可用平台", description: "请先添加并启用至少一个推送平台", variant: "destructive" })
+      } else if (failed === 0) {
+        toast({ title: "发送成功", description: `${succeeded} 个平台全部推送成功` })
+      } else {
+        const failedNames = results.filter(r => !r.success).map(r => r.label || r.platform).join(", ")
+        toast({ title: "部分失败", description: `成功 ${succeeded}，失败 ${failed}（${failedNames}）`, variant: "destructive" })
+      }
+    } catch (error: any) {
+      toast({ title: "发送失败", description: error.message || "Webhook 测试失败", variant: "destructive" })
+    } finally {
+      setTestingWebhook(false)
+    }
+  }
+
+  // 保存 Webhook 配置
+  const saveWebhookConfig = async () => {
+    if (!webhookConfig) return
+    try {
+      await updateWebhookConfig(webhookConfig)
+      queryClient.invalidateQueries({ queryKey: ["webhookConfig"] })
+      toast({ title: "保存成功", description: "Webhook 配置已更新" })
+    } catch (error: any) {
+      toast({ title: "保存失败", description: error.message || "保存 Webhook 配置失败", variant: "destructive" })
+    }
+  }
+
+  // 初始化 webhookConfig
+  if (webhookData && !webhookConfig) {
+    setWebhookConfig(webhookData)
   }
 
   // 保存高级配置
@@ -974,6 +1023,178 @@ export function Settings() {
                     </p>
                   </div>
                 </div>
+              </div>
+
+              {/* Webhook 告警 */}
+              <div className="border-t pt-6">
+                <h4 className="text-sm font-semibold mb-4">Webhook 告警</h4>
+                <p className="text-sm text-muted-foreground mb-4">
+                  事件驱动的多平台推送通知，支持飞书、钉钉、企微、Slack、Discord 等
+                </p>
+
+                {webhookConfig && (
+                  <div className="space-y-4">
+                    {/* 全局开关 */}
+                    <div className="flex items-center justify-between">
+                      <div className="space-y-0.5">
+                        <Label>启用 Webhook 通知</Label>
+                        <p className="text-sm text-muted-foreground">开启后将根据配置推送告警</p>
+                      </div>
+                      <Switch
+                        checked={webhookConfig.enabled}
+                        onCheckedChange={(checked) => setWebhookConfig({ ...webhookConfig, enabled: checked })}
+                      />
+                    </div>
+
+                    {/* 通知类型 */}
+                    <div className="grid gap-4 md:grid-cols-3">
+                      <div className="flex items-center justify-between rounded-lg border p-3">
+                        <div className="space-y-0.5">
+                          <Label className="text-xs">账号异常</Label>
+                        </div>
+                        <Switch
+                          checked={webhookConfig.notifyOnAccountError}
+                          onCheckedChange={(checked) => setWebhookConfig({ ...webhookConfig, notifyOnAccountError: checked })}
+                        />
+                      </div>
+                      <div className="flex items-center justify-between rounded-lg border p-3">
+                        <div className="space-y-0.5">
+                          <Label className="text-xs">Token 刷新失败</Label>
+                        </div>
+                        <Switch
+                          checked={webhookConfig.notifyOnTokenRefreshFail}
+                          onCheckedChange={(checked) => setWebhookConfig({ ...webhookConfig, notifyOnTokenRefreshFail: checked })}
+                        />
+                      </div>
+                      <div className="space-y-1">
+                        <Label className="text-xs">用量阈值 (%)</Label>
+                        <Input
+                          type="number"
+                          min={0}
+                          max={100}
+                          placeholder="0 = 不启用"
+                          value={webhookConfig.usageThreshold}
+                          onChange={(e) => setWebhookConfig({ ...webhookConfig, usageThreshold: parseInt(e.target.value) || 0 })}
+                        />
+                      </div>
+                    </div>
+
+                    {/* 平台列表 */}
+                    <div className="space-y-3">
+                      <div className="flex items-center justify-between">
+                        <Label>推送平台</Label>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => setWebhookConfig({
+                            ...webhookConfig,
+                            platforms: [...webhookConfig.platforms, { platform: "feishu", enabled: true, url: "", label: "" }],
+                          })}
+                        >
+                          <Plus className="mr-1 h-3 w-3" /> 添加平台
+                        </Button>
+                      </div>
+
+                      {webhookConfig.platforms.map((p, idx) => (
+                        <div key={idx} className="rounded-lg border p-3 space-y-3">
+                          <div className="flex items-center gap-2">
+                            <Select
+                              value={p.platform}
+                              onValueChange={(val) => {
+                                const platforms = [...webhookConfig.platforms]
+                                platforms[idx] = { ...p, platform: val as any }
+                                setWebhookConfig({ ...webhookConfig, platforms })
+                              }}
+                            >
+                              <SelectTrigger className="w-[130px]">
+                                <SelectValue />
+                              </SelectTrigger>
+                              <SelectContent>
+                                <SelectItem value="feishu">飞书</SelectItem>
+                                <SelectItem value="dingtalk">钉钉</SelectItem>
+                                <SelectItem value="wechat_work">企业微信</SelectItem>
+                                <SelectItem value="slack">Slack</SelectItem>
+                                <SelectItem value="discord">Discord</SelectItem>
+                                <SelectItem value="custom">自定义</SelectItem>
+                              </SelectContent>
+                            </Select>
+                            <Input
+                              placeholder="标签（可选）"
+                              className="w-[120px]"
+                              value={p.label ?? ""}
+                              onChange={(e) => {
+                                const platforms = [...webhookConfig.platforms]
+                                platforms[idx] = { ...p, label: e.target.value }
+                                setWebhookConfig({ ...webhookConfig, platforms })
+                              }}
+                            />
+                            <Switch
+                              checked={p.enabled}
+                              onCheckedChange={(checked) => {
+                                const platforms = [...webhookConfig.platforms]
+                                platforms[idx] = { ...p, enabled: checked }
+                                setWebhookConfig({ ...webhookConfig, platforms })
+                              }}
+                            />
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              className="h-8 w-8 text-destructive"
+                              onClick={() => {
+                                const platforms = webhookConfig.platforms.filter((_, i) => i !== idx)
+                                setWebhookConfig({ ...webhookConfig, platforms })
+                              }}
+                            >
+                              <Trash2 className="h-4 w-4" />
+                            </Button>
+                          </div>
+                          <Input
+                            placeholder="Webhook URL"
+                            value={p.url}
+                            onChange={(e) => {
+                              const platforms = [...webhookConfig.platforms]
+                              platforms[idx] = { ...p, url: e.target.value }
+                              setWebhookConfig({ ...webhookConfig, platforms })
+                            }}
+                          />
+                          {(p.platform === "feishu" || p.platform === "dingtalk") && (
+                            <Input
+                              placeholder="签名密钥（可选）"
+                              value={p.secret ?? ""}
+                              onChange={(e) => {
+                                const platforms = [...webhookConfig.platforms]
+                                platforms[idx] = { ...p, secret: e.target.value }
+                                setWebhookConfig({ ...webhookConfig, platforms })
+                              }}
+                            />
+                          )}
+                        </div>
+                      ))}
+
+                      {webhookConfig.platforms.length === 0 && (
+                        <p className="text-sm text-muted-foreground text-center py-4">
+                          暂无推送平台，点击上方按钮添加
+                        </p>
+                      )}
+                    </div>
+
+                    {/* 操作按钮 */}
+                    <div className="flex gap-2">
+                      <Button onClick={saveWebhookConfig}>
+                        <Save className="mr-2 h-4 w-4" />
+                        保存 Webhook 配置
+                      </Button>
+                      <Button
+                        variant="outline"
+                        onClick={handleTestWebhook}
+                        disabled={testingWebhook}
+                      >
+                        <Send className="mr-2 h-4 w-4" />
+                        {testingWebhook ? "发送中..." : "测试 Webhook"}
+                      </Button>
+                    </div>
+                  </div>
+                )}
               </div>
 
               <Button

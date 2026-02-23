@@ -12,6 +12,7 @@ import { claudeToKiro } from '../core/translator.js'
 import { generateMachineId } from '../core/machineId.js'
 import type { ProxyAccount, AddAccountRequest, UpdateAccountRequest, ClaudeRequest } from '../core/types.js'
 import type { UsageLimitsResponse, AccountUsage } from '@kiro-gateway/shared'
+import { notify } from '../core/webhook.js'
 
 // 默认测试消息
 const DEFAULT_TEST_MESSAGE = 'hi'
@@ -322,12 +323,16 @@ export async function checkAndRefreshExpiredTokens(): Promise<{
   let refreshed = 0
   let failed = 0
 
-  for (const account of accounts) {
-    checked++
+  checked = accounts.length
 
-    if (needsTokenRefresh(account)) {
+  // 并行刷新，每批最多 5 个
+  const BATCH_SIZE = 5
+  const needsRefresh = accounts.filter(a => needsTokenRefresh(a))
+
+  for (let i = 0; i < needsRefresh.length; i += BATCH_SIZE) {
+    const batch = needsRefresh.slice(i, i + BATCH_SIZE)
+    const results = await Promise.allSettled(batch.map(async (account) => {
       logger.info('Token needs refresh', { id: account.id })
-
       const result = await refreshTokenByMethod(account)
 
       if (result.success && result.accessToken) {
@@ -336,12 +341,23 @@ export async function checkAndRefreshExpiredTokens(): Promise<{
           refreshToken: result.refreshToken,
           expiresAt: result.expiresAt
         })
-        refreshed++
         logger.info('Token auto-refreshed', { id: account.id })
+        return true
       } else {
-        failed++
         logger.error('Token auto-refresh failed', { id: account.id, error: result.error })
+        notify({
+          type: 'token_refresh_fail',
+          timestamp: new Date().toISOString(),
+          account: { id: account.id, alias: account.alias, email: account.email },
+          detail: { error: result.error, authMethod: account.authMethod }
+        }).catch(() => {})
+        return false
       }
+    }))
+
+    for (const r of results) {
+      if (r.status === 'fulfilled' && r.value) refreshed++
+      else failed++
     }
   }
 
@@ -381,6 +397,12 @@ export async function selectAvailableAccount(): Promise<ProxyAccount | null> {
     // 刷新失败，标记为异常挂起
     await accountStore.updateAccount(selected.id, { status: 'error_suspended' })
     logger.error('Account marked unavailable due to token refresh failure', { id: selected.id })
+    notify({
+      type: 'account_error',
+      timestamp: new Date().toISOString(),
+      account: { id: selected.id, alias: selected.alias, email: selected.email },
+      detail: { status: 'error_suspended', reason: 'token_refresh_failure' }
+    }).catch(() => {})
 
     // 递归选择下一个
     return selectAvailableAccount()
@@ -481,6 +503,12 @@ export async function getAllAccountsUsage(): Promise<AccountUsage[]> {
         if (account.status !== 'suspended') {
           await accountStore.updateAccount(account.id, { status: 'suspended' })
           logger.warn('Account marked as suspended (banned by Kiro)', { id: account.id })
+          notify({
+            type: 'account_error',
+            timestamp: new Date().toISOString(),
+            account: { id: account.id, alias: account.alias, email: account.email },
+            detail: { status: 'suspended', reason: 'TEMPORARILY_SUSPENDED', error: errorMsg }
+          }).catch(() => {})
         }
       }
 
@@ -514,6 +542,12 @@ export async function pauseAccount(id: string): Promise<ProxyAccount | null> {
   const updated = await accountStore.updateAccount(id, { status: 'paused' })
   if (updated) {
     logger.info('Account paused', { id })
+    notify({
+      type: 'account_error',
+      timestamp: new Date().toISOString(),
+      account: { id, alias: account.alias, email: account.email },
+      detail: { status: 'paused', reason: 'manual' }
+    }).catch(() => {})
   }
   return updated
 }
@@ -528,6 +562,12 @@ export async function resumeAccount(id: string): Promise<ProxyAccount | null> {
   const updated = await accountStore.updateAccount(id, { status: 'active' })
   if (updated) {
     logger.info('Account resumed', { id })
+    notify({
+      type: 'account_error',
+      timestamp: new Date().toISOString(),
+      account: { id, alias: account.alias, email: account.email },
+      detail: { status: 'active', reason: 'manual' }
+    }).catch(() => {})
   }
   return updated
 }
@@ -539,7 +579,15 @@ export async function batchPauseAccounts(accountIds: string[]): Promise<number> 
   let updated = 0
   for (const id of accountIds) {
     const result = await accountStore.updateAccount(id, { status: 'paused' })
-    if (result) updated++
+    if (result) {
+      updated++
+      notify({
+        type: 'account_error',
+        timestamp: new Date().toISOString(),
+        account: { id, alias: result.alias, email: result.email },
+        detail: { status: 'paused', reason: 'batch' }
+      }).catch(() => {})
+    }
   }
   logger.info('Batch pause completed', { requested: accountIds.length, updated })
   return updated
@@ -552,7 +600,15 @@ export async function batchResumeAccounts(accountIds: string[]): Promise<number>
   let updated = 0
   for (const id of accountIds) {
     const result = await accountStore.updateAccount(id, { status: 'active' })
-    if (result) updated++
+    if (result) {
+      updated++
+      notify({
+        type: 'account_error',
+        timestamp: new Date().toISOString(),
+        account: { id, alias: result.alias, email: result.email },
+        detail: { status: 'active', reason: 'batch' }
+      }).catch(() => {})
+    }
   }
   logger.info('Batch resume completed', { requested: accountIds.length, updated })
   return updated

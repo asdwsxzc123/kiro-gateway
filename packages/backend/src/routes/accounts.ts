@@ -144,6 +144,7 @@ router.get('/', async (_req: Request, res: Response) => {
     // 隐藏敏感信息
     const safeAccounts = accounts.map(acc => ({
       id: acc.id,
+      alias: acc.alias,
       email: acc.email,
       userId: acc.userId,
       authMethod: acc.authMethod,
@@ -190,6 +191,7 @@ router.get('/:id', async (req: Request, res: Response) => {
     // 返回完整账号信息（包含敏感字段）
     const fullAccount = {
       id: account.id,
+      alias: account.alias,
       email: account.email,
       userId: account.userId,
       accessToken: account.accessToken,

@@ -43,6 +43,28 @@ import { computeSessionHash, getSessionAccount, setSessionAccount } from './sess
 
 const logger = createLogger('ProxyServer')
 
+// 计费 token 上限
+const MAX_BILLING_TOKENS_200K = 200000
+const MAX_BILLING_TOKENS_1M = 1000000
+
+/**
+ * 判断是否为 1M 上下文模型
+ */
+function is1MModel(model: string): boolean {
+  return /1m/i.test(model)
+}
+
+/**
+ * 限制计费 token 不超过模型上限
+ * 1M 模型上限 1000000，其他模型上限 200000
+ * 超出时返回上限 75%-99.5% 之间的随机值
+ */
+function capBillingTokens(tokens: number, model: string): number {
+  const max = is1MModel(model) ? MAX_BILLING_TOKENS_1M : MAX_BILLING_TOKENS_200K
+  if (tokens <= max) return tokens
+  return Math.floor(max * (0.75 + Math.random() * 0.245))
+}
+
 // 默认配置
 const DEFAULT_CONFIG: ProxyConfig = {
   enabled: true,
@@ -77,6 +99,7 @@ export class ProxyServer {
   private events: ProxyServerEvents
   private refreshingTokens: Set<string> = new Set()
   private apiKeys: Map<string, ApiKey> = new Map()
+  private activeConcurrent: number = 0
 
   constructor(config: Partial<ProxyConfig> = {}, events: ProxyServerEvents = {}) {
     this.config = { ...DEFAULT_CONFIG, ...config }
@@ -455,6 +478,19 @@ export class ProxyServer {
           error: errorMsg
         })
 
+        // 402: 月度用量耗尽，自动暂停并切换账号
+        if (errorMsg.includes('402') || errorMsg.includes('MONTHLY_REQUEST_COUNT')) {
+          this.accountPool.setStatus(currentAccount.id, 'paused')
+          accountStore.updateAccount(currentAccount.id, { status: 'paused' }).catch(() => {})
+          logger.warn('Account auto-paused due to monthly limit', { accountId: currentAccount.id })
+          const nextAccount = this.accountPool.getNextAvailableAccount(currentAccount.id)
+          if (nextAccount) {
+            currentAccount = nextAccount
+            continue
+          }
+          break
+        }
+
         // 检测账号被封禁（TEMPORARILY_SUSPENDED）
         if (errorMsg.includes('TEMPORARILY_SUSPENDED') || errorMsg.includes('temporarily is suspended')) {
           this.accountPool.setStatus(currentAccount.id, 'suspended')
@@ -514,6 +550,22 @@ export class ProxyServer {
   // ============ Claude 请求处理 ============
 
   async handleClaudeRequest(
+    request: ClaudeRequest,
+    _headers?: Record<string, string>,
+    boundAccountIds?: string[]
+  ): Promise<{ success: boolean; response?: unknown; error?: string }> {
+    if (this.activeConcurrent >= this.config.maxConcurrent) {
+      return { success: false, error: 'Too many concurrent requests' }
+    }
+    this.activeConcurrent++
+    try {
+      return await this._handleClaudeRequest(request, _headers, boundAccountIds)
+    } finally {
+      this.activeConcurrent--
+    }
+  }
+
+  private async _handleClaudeRequest(
     request: ClaudeRequest,
     _headers?: Record<string, string>,
     boundAccountIds?: string[]
@@ -584,11 +636,11 @@ export class ProxyServer {
       // 仅主题检测（haiku 无 tools）跳过计费和日志
       const skipBilling = topicDetection
 
-      // 用自计算的 input tokens 做 cache 拆分
+      // 用自计算的 input tokens 做 cache 拆分，并限制不超过 200k
       const cacheCalc = splitTokensByRatio(cacheRatio, selfInputTokens)
-      const uncachedInputTokens = userOnlyTokens ?? cacheCalc.uncachedTokens
-      const cacheWriteTokens = cacheCalc.cacheCreationTokens
-      const cacheReadTokens = cacheCalc.cacheReadTokens
+      const uncachedInputTokens = capBillingTokens(userOnlyTokens ?? cacheCalc.uncachedTokens, effectiveRequest.model)
+      const cacheWriteTokens = capBillingTokens(cacheCalc.cacheCreationTokens, effectiveRequest.model)
+      const cacheReadTokens = capBillingTokens(cacheCalc.cacheReadTokens, effectiveRequest.model)
       const totalInputTokens = uncachedInputTokens + cacheWriteTokens + cacheReadTokens
 
       logger.info('=== INPUT TOKEN DEBUG (non-stream) ===', {
@@ -609,8 +661,8 @@ export class ProxyServer {
         finalInputTokens: uncachedInputTokens,
         finalTotal: totalInputTokens
       })
-      // output tokens 由 kiroApi parseEventStream 自计算（tiktoken）
-      const outputTokens = result.usage.outputTokens
+      // output tokens 由 kiroApi parseEventStream 自计算（tiktoken），限制不超过 200k
+      const outputTokens = capBillingTokens(result.usage.outputTokens, effectiveRequest.model)
       const kiroCredits = result.usage.kiroCredits
 
       const response = kiroToClaudeResponse(
@@ -698,47 +750,23 @@ export class ProxyServer {
           logger.error('Failed to persist global stats', { error: (err as Error).message })
         })
 
-        // Update daily stats
+        // Update daily stats (fire-and-forget, 不阻塞响应)
         const today = new Date().toISOString().split('T')[0]
 
-        // 更新全局日统计
-        await dailyStatsStore.updateDailyGlobalStats(
-          today,
-          true,
-          uncachedInputTokens,
-          outputTokens,
-          0,
-          cost2.totalCost,
-          cacheWriteTokens,
-          cacheReadTokens
-        ).catch(err => {
-          logger.error('Failed to persist daily global stats', { error: (err as Error).message })
-        })
-
-        // 更新账号日统计
-        await dailyStatsStore.updateDailyAccountStats(
-          usedAccount.id,
-          today,
-          true,
-          uncachedInputTokens,
-          outputTokens,
-          Date.now() - startTime,
-          cost2.totalCost,
-          cacheWriteTokens,
-          cacheReadTokens
-        ).catch(err => {
-          logger.error('Failed to persist daily account stats', { error: (err as Error).message })
-        })
-
-        // 更新模型日统计
-        await dailyStatsStore.updateDailyModelStats(
-          effectiveRequest.model,
-          today,
-          uncachedInputTokens,
-          outputTokens,
-          cost2.totalCost
-        ).catch(err => {
-          logger.error('Failed to persist daily model stats', { error: (err as Error).message })
+        Promise.all([
+          dailyStatsStore.updateDailyGlobalStats(
+            today, true, uncachedInputTokens, outputTokens, 0,
+            cost2.totalCost, cacheWriteTokens, cacheReadTokens
+          ),
+          dailyStatsStore.updateDailyAccountStats(
+            usedAccount.id, today, true, uncachedInputTokens, outputTokens,
+            Date.now() - startTime, cost2.totalCost, cacheWriteTokens, cacheReadTokens
+          ),
+          dailyStatsStore.updateDailyModelStats(
+            effectiveRequest.model, today, uncachedInputTokens, outputTokens, cost2.totalCost
+          )
+        ]).catch(err => {
+          logger.error('Failed to persist daily stats', { error: (err as Error).message })
         })
       }
 
@@ -761,6 +789,29 @@ export class ProxyServer {
   // ============ Claude 流式处理 ============
 
   async handleClaudeStreamRequest(
+    request: ClaudeRequest,
+    callbacks: {
+      onChunk: (chunk: string) => void
+      onComplete: () => void
+      onError: (error: Error) => void
+    },
+    headers?: Record<string, string>,
+    matchedApiKey?: ApiKey,
+    boundAccountIds?: string[]
+  ): Promise<void> {
+    if (this.activeConcurrent >= this.config.maxConcurrent) {
+      callbacks.onError(new Error('Too many concurrent requests'))
+      return
+    }
+    this.activeConcurrent++
+    try {
+      await this._handleClaudeStreamRequest(request, callbacks, headers, matchedApiKey, boundAccountIds)
+    } finally {
+      this.activeConcurrent--
+    }
+  }
+
+  private async _handleClaudeStreamRequest(
     request: ClaudeRequest,
     callbacks: {
       onChunk: (chunk: string) => void
@@ -848,7 +899,7 @@ export class ProxyServer {
       const cacheRatio = await calculateCacheRatio(account.id, effectiveRequest)
       const estimatedTotalInputTokens = estimateRequestWeight(effectiveRequest)
       // Deterministic user-only tokens (no Redis dependency)
-      const userOnlyTokens = estimateUserOnlyTokens(effectiveRequest)
+      const userOnlyTokens = estimateUserOnlyTokens(effectiveRequest) ?? undefined
       // 提取用户输入内容
       const userInput = extractUserInputText(effectiveRequest)
 
@@ -946,7 +997,7 @@ export class ProxyServer {
     cacheRatio?: CacheRatio | null,
     sessionHash?: string | null,
     estimatedTotalInputTokens?: number,
-    userOnlyTokens?: number | null,
+    userOnlyTokens?: number,
     skipBilling?: boolean,
     userInput?: string,
     skipRecording?: boolean
@@ -1112,10 +1163,10 @@ export class ProxyServer {
           stop_reason: null,
           stop_sequence: null,
           usage: {
-            input_tokens: userOnlyTokens ?? estimatedCacheCalc?.uncachedTokens ?? estimatedInputTokens,
+            input_tokens: capBillingTokens(userOnlyTokens ?? estimatedCacheCalc?.uncachedTokens ?? estimatedInputTokens, model),
             output_tokens: 0,
-            cache_creation_input_tokens: estimatedCacheCalc?.cacheCreationTokens ?? 0,
-            cache_read_input_tokens: estimatedCacheCalc?.cacheReadTokens ?? 0
+            cache_creation_input_tokens: capBillingTokens(estimatedCacheCalc?.cacheCreationTokens ?? 0, model),
+            cache_read_input_tokens: capBillingTokens(estimatedCacheCalc?.cacheReadTokens ?? 0, model)
           }
         }
       })
@@ -1188,20 +1239,20 @@ export class ProxyServer {
             currentBlockIndex++
           }
 
-          // 自计算 token：input 使用预算值，output 由 kiroApi 自计算
-          const outputTokens = usage.outputTokens
+          // 自计算 token：input 使用预算值，output 由 kiroApi 自计算，限制不超过 200k
+          const outputTokens = capBillingTokens(usage.outputTokens, model)
           const kiroCredits = usage.kiroCredits
 
-          // 用自计算的 input tokens 做 cache 拆分
+          // 用自计算的 input tokens 做 cache 拆分，限制不超过模型上限
           let cacheCalc: CacheCalculation | null = null
           if (cacheRatio) {
             cacheCalc = splitTokensByRatio(cacheRatio, estimatedInputTokens)
-            this.stats.cacheCreationTokens += cacheCalc.cacheCreationTokens
-            this.stats.cacheReadTokens += cacheCalc.cacheReadTokens
+            this.stats.cacheCreationTokens += capBillingTokens(cacheCalc.cacheCreationTokens, model)
+            this.stats.cacheReadTokens += capBillingTokens(cacheCalc.cacheReadTokens, model)
           }
-          const cacheWriteTokens = cacheCalc?.cacheCreationTokens ?? 0
-          const cacheReadTokens = cacheCalc?.cacheReadTokens ?? 0
-          const uncachedInputTokens = userOnlyTokens ?? cacheCalc?.uncachedTokens ?? estimatedInputTokens
+          const cacheWriteTokens = capBillingTokens(cacheCalc?.cacheCreationTokens ?? 0, model)
+          const cacheReadTokens = capBillingTokens(cacheCalc?.cacheReadTokens ?? 0, model)
+          const uncachedInputTokens = capBillingTokens(userOnlyTokens ?? cacheCalc?.uncachedTokens ?? estimatedInputTokens, model)
           const totalInputTokens = uncachedInputTokens + cacheWriteTokens + cacheReadTokens
 
           logger.info('=== STREAM TOKEN DECISION (completion) ===', {
@@ -1282,47 +1333,23 @@ export class ProxyServer {
               logger.error('Failed to persist global stats', { error: (err as Error).message })
             })
 
-            // Update daily stats
+            // Update daily stats (fire-and-forget, 不阻塞流式响应)
             const today = new Date().toISOString().split('T')[0]
 
-            // 更新全局日统计
-            await dailyStatsStore.updateDailyGlobalStats(
-              today,
-              true,
-              uncachedInputTokens,
-              outputTokens,
-              0,
-              costStream2.totalCost,
-              cacheWriteTokens,
-              cacheReadTokens
-            ).catch(err => {
-              logger.error('Failed to persist daily global stats', { error: (err as Error).message })
-            })
-
-            // 更新账号日统计
-            await dailyStatsStore.updateDailyAccountStats(
-              account.id,
-              today,
-              true,
-              uncachedInputTokens,
-              outputTokens,
-              Date.now() - startTime,
-              costStream2.totalCost,
-              cacheWriteTokens,
-              cacheReadTokens
-            ).catch(err => {
-              logger.error('Failed to persist daily account stats', { error: (err as Error).message })
-            })
-
-            // 更新模型日统计
-            await dailyStatsStore.updateDailyModelStats(
-              model,
-              today,
-              uncachedInputTokens,
-              outputTokens,
-              costStream2.totalCost
-            ).catch(err => {
-              logger.error('Failed to persist daily model stats', { error: (err as Error).message })
+            Promise.all([
+              dailyStatsStore.updateDailyGlobalStats(
+                today, true, uncachedInputTokens, outputTokens, 0,
+                costStream2.totalCost, cacheWriteTokens, cacheReadTokens
+              ),
+              dailyStatsStore.updateDailyAccountStats(
+                account.id, today, true, uncachedInputTokens, outputTokens,
+                Date.now() - startTime, costStream2.totalCost, cacheWriteTokens, cacheReadTokens
+              ),
+              dailyStatsStore.updateDailyModelStats(
+                model, today, uncachedInputTokens, outputTokens, costStream2.totalCost
+              )
+            ]).catch(err => {
+              logger.error('Failed to persist daily stats', { error: (err as Error).message })
             })
 
             if (matchedApiKey) {
@@ -1429,6 +1456,14 @@ export class ProxyServer {
         },
         (error) => {
           logger.error('Claude stream error', { error: error.message })
+
+          // 402 月度用量耗尽，自动暂停
+          if (error.message.includes('402') || error.message.includes('MONTHLY_REQUEST_COUNT')) {
+            this.accountPool.setStatus(account.id, 'paused')
+            accountStore.updateAccount(account.id, { status: 'paused' }).catch(() => {})
+            logger.warn('Account auto-paused due to monthly limit (stream)', { accountId: account.id })
+          }
+
           const errorEvent = createClaudeStreamEvent('error', {
             error: { type: 'api_error', message: error.message }
           })

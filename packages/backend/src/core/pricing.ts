@@ -162,6 +162,26 @@ const CLAUDE_PRICES: Record<string, ModelPriceInfo> = {
     supports_prompt_caching: true
   },
 
+  // Claude Sonnet 4.6 — $3/$15 per Mtok (same as Sonnet 4.5)
+  'claude-sonnet-4-6': {
+    input_cost_per_token: 0.000003,
+    output_cost_per_token: 0.000015,
+    cache_creation_input_token_cost: 0.00000375,
+    cache_read_input_token_cost: 0.0000003,
+    max_input_tokens: 200000,
+    max_output_tokens: 64000,
+    supports_prompt_caching: true
+  },
+  'claude-sonnet-4.6': {
+    input_cost_per_token: 0.000003,
+    output_cost_per_token: 0.000015,
+    cache_creation_input_token_cost: 0.00000375,
+    cache_read_input_token_cost: 0.0000003,
+    max_input_tokens: 200000,
+    max_output_tokens: 64000,
+    supports_prompt_caching: true
+  },
+
   // Claude Sonnet 4.5
   'claude-sonnet-4-5-20250929': {
     input_cost_per_token: 0.000003,
@@ -350,6 +370,7 @@ function getBaseModelName(series: string, version: string): string {
       '3': 'claude-3-opus'
     },
     'sonnet': {
+      '4.6': 'claude-sonnet-4-6',
       '4.5': 'claude-sonnet-4-5',
       '4': 'claude-sonnet-4',
       '3.5': 'claude-3.5-sonnet'
@@ -395,7 +416,7 @@ export function findModelPrice(model: string): ModelPriceInfo {
   if (series) {
     const seriesDefaults: Record<string, string> = {
       'opus': 'claude-opus-4-6',
-      'sonnet': 'claude-sonnet-4-5',
+      'sonnet': 'claude-sonnet-4-6',
       'haiku': 'claude-haiku-4-5'
     }
     const defaultModel = seriesDefaults[series]

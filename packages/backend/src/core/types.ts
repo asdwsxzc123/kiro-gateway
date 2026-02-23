@@ -175,6 +175,7 @@ export interface KiroInferenceConfig {
 
 export interface ProxyAccount {
   id: string
+  alias?: string
   email?: string
   userId?: string
   accessToken: string
@@ -202,6 +203,7 @@ export interface ProxyAccount {
 
 // 添加账号请求（机器码可选，不提供则自动生成）
 export interface AddAccountRequest {
+  alias?: string
   email?: string
   accessToken: string
   refreshToken?: string
@@ -216,6 +218,7 @@ export interface AddAccountRequest {
 
 // 更新账号请求
 export interface UpdateAccountRequest {
+  alias?: string
   email?: string
   userId?: string
   accessToken?: string

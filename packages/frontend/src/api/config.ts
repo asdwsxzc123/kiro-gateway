@@ -1,5 +1,5 @@
 import { apiClient } from "./client"
-import type { GatewayConfig, UpdateConfigRequest, ApiKeyRecord, CreateApiKeyRequest, ApiResponse } from "@kiro-gateway/shared"
+import type { GatewayConfig, UpdateConfigRequest, ApiKeyRecord, CreateApiKeyRequest, ApiResponse, WebhookConfig, WebhookDeliveryResult } from "@kiro-gateway/shared"
 
 /**
  * 获取系统配置
@@ -69,5 +69,29 @@ export async function setSelectedAccounts(accountIds: string[]): Promise<void> {
  */
 export async function healthCheck(): Promise<{ status: string; redis: string; timestamp: number }> {
   const response = await apiClient.get<ApiResponse<{ status: string; redis: string; timestamp: number }>>("/admin/health")
+  return response.data.data!
+}
+
+/**
+ * 测试 Webhook
+ */
+export async function testWebhook(): Promise<WebhookDeliveryResult[]> {
+  const response = await apiClient.post<ApiResponse<WebhookDeliveryResult[]>>("/admin/webhook/test")
+  return response.data.data!
+}
+
+/**
+ * 获取 Webhook 配置
+ */
+export async function getWebhookConfig(): Promise<WebhookConfig> {
+  const response = await apiClient.get<ApiResponse<WebhookConfig>>("/admin/webhook/config")
+  return response.data.data!
+}
+
+/**
+ * 更新 Webhook 配置
+ */
+export async function updateWebhookConfig(data: WebhookConfig): Promise<WebhookConfig> {
+  const response = await apiClient.put<ApiResponse<WebhookConfig>>("/admin/webhook/config", data)
   return response.data.data!
 }

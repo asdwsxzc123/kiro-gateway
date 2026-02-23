@@ -67,6 +67,7 @@ export type AccountStatus = 'active' | 'paused' | 'error_suspended' | 'suspended
  */
 export interface Account {
   id: string;
+  alias?: string;
   email?: string;
   userId?: string;
   accessToken: string;
@@ -89,6 +90,7 @@ export interface Account {
 }
 
 export interface AddAccountRequest {
+  alias?: string;
   email?: string;
   accessToken: string;
   refreshToken?: string;
@@ -268,6 +270,7 @@ export interface GatewayConfig {
   autoStopErrorCodes?: string;      // 逗号分隔的错误码，如 "429,403"
   autoStopErrorPatterns?: string;    // 逗号分隔的错误消息匹配模式
   quotaUsageThreshold?: number;      // 配额使用阈值百分比 (0-100)，0 表示不限制
+
 }
 
 export interface UpdateConfigRequest {
@@ -326,6 +329,7 @@ export interface UpdateConfigRequest {
   autoStopErrorCodes?: string;
   autoStopErrorPatterns?: string;
   quotaUsageThreshold?: number;
+
 }
 
 /**
@@ -487,4 +491,44 @@ export interface CostRanking {
   requestCount: number;
   tokenCount: number;
   percentage: number;
+}
+
+// ─── Webhook Types ──────────────────────────────────────────────────────────
+
+export type WebhookPlatformType =
+  | 'feishu' | 'dingtalk' | 'wechat_work'
+  | 'slack' | 'discord' | 'custom'
+
+export type WebhookNotificationType =
+  | 'account_error' | 'usage_alert' | 'token_refresh_fail' | 'test'
+
+export interface WebhookPlatformConfig {
+  platform: WebhookPlatformType;
+  enabled: boolean;
+  url: string;
+  secret?: string;
+  label?: string;
+}
+
+export interface WebhookConfig {
+  enabled: boolean;
+  usageThreshold: number;
+  notifyOnAccountError: boolean;
+  notifyOnTokenRefreshFail: boolean;
+  platforms: WebhookPlatformConfig[];
+}
+
+export interface WebhookNotification {
+  type: WebhookNotificationType;
+  timestamp: string;
+  account?: { id: string; alias?: string; email?: string };
+  detail: Record<string, unknown>;
+}
+
+export interface WebhookDeliveryResult {
+  platform: WebhookPlatformType;
+  label?: string;
+  success: boolean;
+  statusCode?: number;
+  error?: string;
 }

@@ -6,6 +6,7 @@
 
 import type { ProxyAccount } from './types.js'
 import type { AccountStatus } from '@kiro-gateway/shared'
+import { notify } from './webhook.js'
 
 export type { AccountStatus }
 
@@ -194,7 +195,7 @@ export class AccountPool {
       account.requestCount = (account.requestCount || 0) + 1
       // 仅从 error_suspended 自动恢复，手动 paused 和封号 suspended 不自动恢复
       if (account.status === 'error_suspended') {
-        account.status = 'active'
+        this.setStatus(id, 'active')
       }
     }
   }
@@ -220,7 +221,7 @@ export class AccountPool {
         const account = this.accounts.get(id)
         if (account && account.status !== 'paused' && account.status !== 'suspended') {
           // 仅非手动暂停和非封号的账号才自动挂起
-          account.status = 'error_suspended'
+          this.setStatus(id, 'error_suspended')
         }
       }
     }
@@ -266,6 +267,16 @@ export class AccountPool {
       if (stats) {
         stats.errors = 0
       }
+    }
+
+    // 状态变更时触发 webhook 告警
+    if (account) {
+      notify({
+        type: 'account_error',
+        timestamp: new Date().toISOString(),
+        account: { id, alias: account.alias, email: account.email },
+        detail: { status, errorCount: account.errorCount }
+      }).catch(() => {})
     }
   }
 
@@ -393,7 +404,7 @@ export class AccountPool {
       // 重置统计时恢复所有非手动暂停的账号
       const account = this.accounts.get(id)
       if (account && account.status === 'error_suspended') {
-        account.status = 'active'
+        this.setStatus(id, 'active')
       }
     }
   }

@@ -64,6 +64,8 @@ const AGENT_MODE_VIBE = 'vibe'
 
 // 模型 ID 映射
 const MODEL_ID_MAP: Record<string, string> = {
+  'claude-sonnet-4-6': 'claude-sonnet-4.6',
+  'claude-sonnet-4.6': 'claude-sonnet-4.6',
   'claude-sonnet-4-5': 'claude-sonnet-4.5',
   'claude-sonnet-4.5': 'claude-sonnet-4.5',
   'claude-haiku-4-5': 'claude-haiku-4.5',
@@ -577,7 +579,7 @@ async function parseEventStream(
             const payloadText = new TextDecoder().decode(payloadBytes)
             const event = JSON.parse(payloadText)
 
-            console.log(`[Event] data=${JSON.stringify(event).slice(0, 200)}`)
+            // console.log(`[Event] data=${JSON.stringify(event).slice(0, 200)}`)
 
             // 处理 assistantResponseEvent
             if (eventType === 'assistantResponseEvent' || event.assistantResponseEvent) {
@@ -923,15 +925,15 @@ export async function callKiroApiStream(
       }
 
       const payloadStr = JSON.stringify(payload)
-      console.log(`[Request] payloadSize=${payloadStr.length} payload=${payloadStr.slice(0, 200)}`)
-      logger.debug(`Request to ${endpoint.name}`, {
-        contentLength: payload.conversationState.currentMessage.userInputMessage?.content?.length || 0,
-        toolsCount: payload.conversationState.currentMessage.userInputMessage?.userInputMessageContext?.tools?.length || 0,
-        payloadSize: payloadStr.length
-      })
+      // console.log(`[Request] payloadSize=${payloadStr.length} payload=${payloadStr.slice(0, 200)}`)
+      // logger.debug(`Request to ${endpoint.name}`, {
+      //   contentLength: payload.conversationState.currentMessage.userInputMessage?.content?.length || 0,
+      //   toolsCount: payload.conversationState.currentMessage.userInputMessage?.userInputMessageContext?.tools?.length || 0,
+      //   payloadSize: payloadStr.length
+      // })
 
       const headers = getAuthHeaders(account, endpoint, skipAgentMode)
-      console.log(`[Request] headers=${JSON.stringify(headers).slice(0, 200)}`)
+      // console.log(`[Request] headers=${JSON.stringify(headers).slice(0, 200)}`)
       const response = await fetch(endpoint.url, {
         method: 'POST',
         headers,

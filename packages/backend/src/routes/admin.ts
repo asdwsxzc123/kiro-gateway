@@ -11,6 +11,7 @@ import { checkRedisHealth } from '../storage/redis.js'
 import { v4 as uuidv4 } from 'uuid'
 import type { ApiResponse } from '../core/types.js'
 import { getClaudePrices, updatePriceFromRemote, findModelPrice } from '../core/pricing.js'
+import { sendTestNotification } from '../core/webhook.js'
 
 const logger = createLogger('AdminRoute')
 const router: IRouter = Router()
@@ -301,6 +302,57 @@ router.post('/prices/update', async (req: Request, res: Response) => {
     }
   } catch (error) {
     logger.error('Failed to update prices', { error: (error as Error).message })
+    res.status(500).json({
+      success: false,
+      error: { message: (error as Error).message }
+    } as ApiResponse)
+  }
+})
+
+/**
+ * 测试 Webhook
+ * POST /api/admin/webhook/test
+ */
+router.post('/webhook/test', async (_req: Request, res: Response) => {
+  try {
+    const results = await sendTestNotification()
+    res.json({ success: true, data: results } as ApiResponse)
+  } catch (error) {
+    logger.error('Failed to send test webhook', { error: (error as Error).message })
+    res.status(500).json({
+      success: false,
+      error: { message: (error as Error).message }
+    } as ApiResponse)
+  }
+})
+
+/**
+ * 获取 Webhook 配置
+ * GET /api/admin/webhook/config
+ */
+router.get('/webhook/config', async (_req: Request, res: Response) => {
+  try {
+    const config = await configStore.getWebhookConfig()
+    res.json({ success: true, data: config } as ApiResponse)
+  } catch (error) {
+    logger.error('Failed to get webhook config', { error: (error as Error).message })
+    res.status(500).json({
+      success: false,
+      error: { message: (error as Error).message }
+    } as ApiResponse)
+  }
+})
+
+/**
+ * 更新 Webhook 配置
+ * PUT /api/admin/webhook/config
+ */
+router.put('/webhook/config', async (req: Request, res: Response) => {
+  try {
+    const config = await configStore.updateWebhookConfig(req.body)
+    res.json({ success: true, data: config } as ApiResponse)
+  } catch (error) {
+    logger.error('Failed to update webhook config', { error: (error as Error).message })
     res.status(500).json({
       success: false,
       error: { message: (error as Error).message }
