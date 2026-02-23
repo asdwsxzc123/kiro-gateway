@@ -214,6 +214,16 @@ export interface LogsSummary {
 }
 
 /**
+ * 日志文件信息
+ */
+export interface LogFile {
+  filename: string;
+  type: 'requests' | 'system';
+  size: number;
+  date: string;
+}
+
+/**
  * 配置相关类型 - 与后端 GatewayConfig 对应
  */
 export interface GatewayConfig {

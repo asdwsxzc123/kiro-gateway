@@ -6,6 +6,9 @@
 import * as logStore from '../storage/logStore.js'
 import { createLogger } from '../utils/logger.js'
 import type { RequestLog, SystemLog } from '../core/types.js'
+import fs from 'fs/promises'
+import path from 'path'
+import { getConfig } from '../config/index.js'
 
 const logger = createLogger('LogService')
 
@@ -116,4 +119,66 @@ export async function getRequestLogSummary(hours: number = 24): Promise<{
     : 0
 
   return { total, success, failed, avgResponseTime }
+}
+
+/**
+ * 获取所有日志文件列表
+ */
+export async function getLogFiles(): Promise<Array<{
+  filename: string
+  type: 'requests' | 'system'
+  size: number
+  date: string
+}>> {
+  const logDir = getConfig().log.dir
+  const files: Array<{ filename: string; type: 'requests' | 'system'; size: number; date: string }> = []
+
+  for (const type of ['requests', 'system'] as const) {
+    const dir = path.join(logDir, type)
+    try {
+      await fs.access(dir)
+    } catch {
+      continue
+    }
+
+    const entries = await fs.readdir(dir)
+    for (const entry of entries) {
+      if (!entry.endsWith('.log')) continue
+      const filePath = path.join(dir, entry)
+      const stat = await fs.stat(filePath)
+      // 从文件名提取日期，如 requests-2026-02-23.log → 2026-02-23
+      const dateMatch = entry.match(/\d{4}-\d{2}-\d{2}/)
+      files.push({
+        filename: entry,
+        type,
+        size: stat.size,
+        date: dateMatch ? dateMatch[0] : ''
+      })
+    }
+  }
+
+  // 按日期降序排列
+  files.sort((a, b) => b.date.localeCompare(a.date))
+  return files
+}
+
+/**
+ * 获取日志文件的绝对路径（含安全校验）
+ */
+export async function getLogFilePath(type: string, filename: string): Promise<string | null> {
+  // 安全校验：只允许合法文件名
+  const validFilename = /^(requests|system)-\d{4}-\d{2}-\d{2}\.log$/
+  if (!validFilename.test(filename)) return null
+  if (type !== 'requests' && type !== 'system') return null
+  if (filename.includes('..') || filename.includes('/')) return null
+
+  const logDir = getConfig().log.dir
+  const filePath = path.join(logDir, type, filename)
+
+  try {
+    await fs.access(filePath)
+    return filePath
+  } catch {
+    return null
+  }
 }

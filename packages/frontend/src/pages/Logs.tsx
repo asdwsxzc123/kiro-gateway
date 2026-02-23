@@ -1,6 +1,6 @@
 import { useState, useMemo } from "react"
 import { useQuery } from "@tanstack/react-query"
-import { Search, Filter, Loader2, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, Calendar, X } from "lucide-react"
+import { Search, Filter, Loader2, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, Calendar, X, Download, FileText } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import {
@@ -25,7 +25,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
-import { getRequestLogs } from "@/api/logs"
+import { getRequestLogs, getLogFiles, downloadLogFile } from "@/api/logs"
 import type { LogsQuery } from "@kiro-gateway/shared"
 
 // 每页显示数量选项
@@ -79,6 +79,14 @@ function getDateRange(preset: string): { startTime?: number; endTime?: number } 
   }
 }
 
+const formatFileSize = (bytes: number): string => {
+  if (bytes === 0) return '0 B'
+  const k = 1024
+  const sizes = ['B', 'KB', 'MB', 'GB']
+  const i = Math.floor(Math.log(bytes) / Math.log(k))
+  return `${(bytes / Math.pow(k, i)).toFixed(1)} ${sizes[i]}`
+}
+
 /**
  * Logs 页面 - 请求日志与 Token 使用明细
  */
@@ -95,6 +103,10 @@ export function Logs() {
   const [datePreset, setDatePreset] = useState<string>("all")
   const [customStartDate, setCustomStartDate] = useState<string>("")
   const [customEndDate, setCustomEndDate] = useState<string>("")
+
+  // Tab 状态
+  const [activeTab, setActiveTab] = useState<'requests' | 'files'>('requests')
+  const [fileTypeFilter, setFileTypeFilter] = useState<string>('all')
 
   // 计算时间范围
   const dateRange = useMemo(() => {
@@ -123,6 +135,17 @@ export function Logs() {
     queryFn: () => getRequestLogs(query),
   })
 
+  // 日志文件查询
+  const { data: logFiles = [], isLoading: isFilesLoading, refetch: refetchFiles } = useQuery({
+    queryKey: ['logFiles'],
+    queryFn: getLogFiles,
+    enabled: activeTab === 'files'
+  })
+
+  const filteredFiles = fileTypeFilter === 'all'
+    ? logFiles
+    : logFiles.filter(f => f.type === fileTypeFilter)
+
   // 从响应中获取数据
   const logs = logsResponse?.data ?? []
   const total = logsResponse?.total ?? 0
@@ -144,6 +167,13 @@ export function Logs() {
     if (model.startsWith("claude")) return "claude"
     if (model.startsWith("gpt")) return "openai"
     return "unknown"
+  }
+
+  const formatTokens = (count: number): string => {
+    if (count >= 1000) {
+      return `${(count / 1000).toFixed(1)}k`
+    }
+    return count.toLocaleString()
   }
 
   const formatCost = (cost?: number) => {
@@ -202,6 +232,25 @@ export function Logs() {
         </p>
       </div>
 
+      {/* Tab 切换 */}
+      <div className="flex gap-2">
+        <Button
+          variant={activeTab === 'requests' ? 'default' : 'outline'}
+          onClick={() => setActiveTab('requests')}
+        >
+          <Search className="mr-2 h-4 w-4" />
+          请求日志
+        </Button>
+        <Button
+          variant={activeTab === 'files' ? 'default' : 'outline'}
+          onClick={() => setActiveTab('files')}
+        >
+          <FileText className="mr-2 h-4 w-4" />
+          日志文件
+        </Button>
+      </div>
+
+      {activeTab === 'requests' && (<>
       {/* 筛选区域 */}
       <Card>
         <CardHeader>
@@ -376,10 +425,10 @@ export function Logs() {
                       <TableCell>{getProvider(log.model)}</TableCell>
                       <TableCell className="max-w-[200px] truncate" title={log.model}>{log.model}</TableCell>
                       <TableCell className="font-mono text-xs">{log.path}</TableCell>
-                      <TableCell className="text-right">{log.inputTokens.toLocaleString()}</TableCell>
-                      <TableCell className="text-right">{log.outputTokens.toLocaleString()}</TableCell>
-                      <TableCell className="text-right">{(log.cacheReadTokens ?? 0).toLocaleString()}</TableCell>
-                      <TableCell className="text-right">{(log.cacheCreationTokens ?? 0).toLocaleString()}</TableCell>
+                      <TableCell className="text-right">{formatTokens(log.inputTokens)}</TableCell>
+                      <TableCell className="text-right">{formatTokens(log.outputTokens)}</TableCell>
+                      <TableCell className="text-right">{formatTokens(log.cacheReadTokens ?? 0)}</TableCell>
+                      <TableCell className="text-right">{formatTokens(log.cacheCreationTokens ?? 0)}</TableCell>
                       <TableCell className="text-right whitespace-nowrap">{formatCost(log.cost)}</TableCell>
                       <TableCell className="text-right">{log.kiroCredits ?? "-"}</TableCell>
                       <TableCell>
@@ -472,6 +521,83 @@ export function Logs() {
           )}
         </CardContent>
       </Card>
+      </>)}
+
+      {activeTab === 'files' && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center justify-between">
+              <span>日志文件</span>
+              <div className="flex gap-2">
+                <Select value={fileTypeFilter} onValueChange={setFileTypeFilter}>
+                  <SelectTrigger className="w-32">
+                    <SelectValue placeholder="文件类型" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">全部</SelectItem>
+                    <SelectItem value="requests">请求日志</SelectItem>
+                    <SelectItem value="system">系统日志</SelectItem>
+                  </SelectContent>
+                </Select>
+                <Button variant="outline" onClick={() => refetchFiles()}>
+                  <Search className="mr-2 h-4 w-4" />
+                  刷新
+                </Button>
+              </div>
+            </CardTitle>
+            <CardDescription>
+              下载历史日志文件
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            {isFilesLoading ? (
+              <div className="py-8 text-center">加载中...</div>
+            ) : filteredFiles.length === 0 ? (
+              <div className="py-8 text-center text-muted-foreground">
+                暂无日志文件
+              </div>
+            ) : (
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>文件名</TableHead>
+                    <TableHead>类型</TableHead>
+                    <TableHead>日期</TableHead>
+                    <TableHead className="text-right">大小</TableHead>
+                    <TableHead className="text-right">操作</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {filteredFiles.map((file) => (
+                    <TableRow key={`${file.type}-${file.filename}`}>
+                      <TableCell className="font-mono text-sm">{file.filename}</TableCell>
+                      <TableCell>
+                        <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${
+                          file.type === 'requests' ? 'bg-blue-100 text-blue-700' : 'bg-purple-100 text-purple-700'
+                        }`}>
+                          {file.type === 'requests' ? '请求日志' : '系统日志'}
+                        </span>
+                      </TableCell>
+                      <TableCell>{file.date}</TableCell>
+                      <TableCell className="text-right">{formatFileSize(file.size)}</TableCell>
+                      <TableCell className="text-right">
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => downloadLogFile(file.type, file.filename)}
+                        >
+                          <Download className="mr-1 h-4 w-4" />
+                          下载
+                        </Button>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            )}
+          </CardContent>
+        </Card>
+      )}
     </div>
   )
 }

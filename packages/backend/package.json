@@ -27,7 +27,8 @@
     "jsonwebtoken": "^9.0.3",
     "rate-limit-redis": "^4.2.0",
     "uuid": "^11.0.5",
-    "winston": "^3.17.0"
+    "winston": "^3.17.0",
+    "winston-daily-rotate-file": "^5.0.0"
   },
   "devDependencies": {
     "@types/bcryptjs": "^3.0.0",

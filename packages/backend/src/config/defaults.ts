@@ -40,7 +40,8 @@ export const DEFAULT_RATE_LIMIT_CONFIG = {
 // 日志默认配置
 export const DEFAULT_LOG_CONFIG = {
   level: 'info',
-  maxEntries: 100000
+  maxEntries: 100000,
+  dir: './logs'
 } as const
 
 // 账号池默认配置

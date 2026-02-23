@@ -1,5 +1,5 @@
 import { apiClient } from "./client"
-import type { RequestLog, SystemLog, LogsQuery, LogsSummary, ApiResponse, PaginatedLogsResponse } from "@kiro-gateway/shared"
+import type { RequestLog, SystemLog, LogsQuery, LogsSummary, ApiResponse, PaginatedLogsResponse, LogFile } from "@kiro-gateway/shared"
 
 /**
  * 获取请求日志（支持分页）
@@ -67,4 +67,45 @@ export async function clearRequestLogs(): Promise<void> {
  */
 export async function clearSystemLogs(): Promise<void> {
   await apiClient.delete("/logs/system")
+}
+
+/**
+ * 获取日志文件列表
+ */
+export async function getLogFiles(): Promise<LogFile[]> {
+  const response = await apiClient.get<ApiResponse<LogFile[]>>("/logs/files")
+  return response.data.data!
+}
+
+/**
+ * 下载日志文件
+ */
+export function downloadLogFile(type: string, filename: string): void {
+  const baseUrl = apiClient.defaults.baseURL || ''
+  const token = localStorage.getItem('jwt_token')
+  const url = `${baseUrl}/logs/files/download?type=${encodeURIComponent(type)}&filename=${encodeURIComponent(filename)}`
+
+  fetch(url, {
+    headers: token ? { Authorization: `Bearer ${token}` } : {}
+  })
+    .then(res => {
+      if (!res.ok) {
+        throw new Error(`下载失败: ${res.status} ${res.statusText}`)
+      }
+      return res.blob()
+    })
+    .then(blob => {
+      const blobUrl = URL.createObjectURL(blob)
+      const link = document.createElement('a')
+      link.href = blobUrl
+      link.download = filename
+      document.body.appendChild(link)
+      link.click()
+      document.body.removeChild(link)
+      URL.revokeObjectURL(blobUrl)
+    })
+    .catch(err => {
+      console.error('Download failed:', err)
+      alert(err instanceof Error ? err.message : '下载失败')
+    })
 }

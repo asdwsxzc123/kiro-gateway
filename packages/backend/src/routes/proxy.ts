@@ -36,18 +36,25 @@ async function getProxyServer(): Promise<ProxyServer> {
       host: config.host,
       enableMultiAccount: config.enableMultiAccount,
       selectedAccountIds: [],
-      logRequests: true,
+      logRequests: config.enableRequestLogging ?? true,
       maxConcurrent: config.maxConcurrent,
       maxRetries: config.maxRetries,
       retryDelayMs: config.retryDelay,
-      tokenRefreshBeforeExpiry: 300,
+      tokenRefreshBeforeExpiry: config.tokenRefreshBeforeExpiry ?? 300,
       autoStart: false,
       preferredEndpoint: config.preferredEndpoint,
       defaultRegion: config.defaultRegion,
       autoContinueRounds,
       disableTools,
       autoSwitchOnQuotaExhausted: config.autoSwitchOnQuotaExhausted,
+      errorCooldown429: config.errorCooldownTime ?? 60000,
       thinkingOutputFormat: 'thinking'
+    })
+
+    // 应用账号池配置
+    proxyServer.updatePoolConfig({
+      errorCooldownMs: config.errorCooldownTime ?? 60000,
+      maxConsecutiveErrors: config.maxConsecutiveErrors ?? 3
     })
 
     // 加载账号
@@ -81,6 +88,39 @@ export async function refreshProxyServerAccounts(): Promise<void> {
 export function getInflightRequests(): import('../core/proxyServer.js').InflightRequest[] {
   if (!proxyServer) return []
   return proxyServer.getInflightRequests()
+}
+
+/**
+ * 热更新 ProxyServer 配置（配置修改后立即生效，无需重启）
+ */
+export async function updateProxyServerConfig(): Promise<void> {
+  if (!proxyServer) return
+
+  const config = await configStore.getGatewayConfig()
+  const disableTools = config.disableTools ?? config.disableToolCalls ?? false
+  const autoContinueRounds = config.autoContinueRounds ?? config.toolCallAutoRounds ?? 0
+
+  proxyServer.updateConfig({
+    enableMultiAccount: config.enableMultiAccount,
+    logRequests: config.enableRequestLogging ?? true,
+    maxConcurrent: config.maxConcurrent,
+    maxRetries: config.maxRetries,
+    retryDelayMs: config.retryDelay,
+    tokenRefreshBeforeExpiry: config.tokenRefreshBeforeExpiry ?? 300,
+    preferredEndpoint: config.preferredEndpoint,
+    defaultRegion: config.defaultRegion,
+    autoContinueRounds,
+    disableTools,
+    autoSwitchOnQuotaExhausted: config.autoSwitchOnQuotaExhausted,
+    errorCooldown429: config.errorCooldownTime ?? 60000
+  })
+
+  proxyServer.updatePoolConfig({
+    errorCooldownMs: config.errorCooldownTime ?? 60000,
+    maxConsecutiveErrors: config.maxConsecutiveErrors ?? 3
+  })
+
+  logger.info('ProxyServer config hot-reloaded')
 }
 
 /**

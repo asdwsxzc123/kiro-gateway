@@ -23,6 +23,7 @@ import type {
 } from './types.js'
 import { KiroApiError } from './types.js'
 import { AccountPool } from './accountPool.js'
+import type { PoolConfig } from './accountPool.js'
 import {
   claudeToKiro,
   kiroToClaudeResponse,
@@ -157,6 +158,11 @@ export class ProxyServer {
 
   getConfig(): ProxyConfig {
     return { ...this.config }
+  }
+
+  updatePoolConfig(config: Partial<PoolConfig>): void {
+    this.accountPool.updatePoolConfig(config)
+    logger.info('Pool config updated', { config })
   }
 
   // ============ 账号管理 ============
@@ -435,7 +441,7 @@ export class ProxyServer {
     this.stats.failedRequests++
   }
 
-  private recordRequest(log: Partial<RequestLog>): void {
+  private recordRequest(log: Partial<RequestLog>, messages?: unknown[]): void {
     const requestLog: RequestLog = {
       id: uuidv4(),
       timestamp: Date.now(),
@@ -465,7 +471,7 @@ export class ProxyServer {
     this.events.onStatsUpdate?.(this.stats)
 
     // 写入 Redis 持久化日志
-    logStore.addRequestLog(requestLog).catch(err => {
+    logStore.addRequestLog(requestLog, messages).catch(err => {
       logger.error('Failed to persist request log', { error: (err as Error).message })
     })
   }
@@ -807,7 +813,7 @@ export class ProxyServer {
           success: true,
           auxiliary: false,
           userInput
-        })
+        }, effectiveRequest.messages)
       }
 
       // 仅非辅助请求更新计费统计
@@ -1046,6 +1052,7 @@ export class ProxyServer {
         skipBilling,
         userInput,
         topicDetection,
+        effectiveRequest.messages,
         signal
       )
 
@@ -1087,6 +1094,7 @@ export class ProxyServer {
     skipBilling?: boolean,
     userInput?: string,
     skipRecording?: boolean,
+    messages?: unknown[],
     signal?: AbortSignal
   ): Promise<void> {
     const id = msgId || `msg_${uuidv4()}`
@@ -1398,7 +1406,7 @@ export class ProxyServer {
               success: true,
               auxiliary: false,
               userInput
-            })
+            }, messages)
           }
 
           // 仅非辅助请求更新计费统计
@@ -1512,6 +1520,7 @@ export class ProxyServer {
                 skipBilling,   // preserve billing flag
                 userInput,     // preserve user input
                 skipRecording, // preserve recording flag
+                messages,      // preserve messages for file logging
                 signal         // propagate abort signal
               )
             } catch (error) {

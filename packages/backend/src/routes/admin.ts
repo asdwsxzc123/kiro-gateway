@@ -12,6 +12,7 @@ import { v4 as uuidv4 } from 'uuid'
 import type { ApiResponse } from '../core/types.js'
 import { getClaudePrices, updatePriceFromRemote, findModelPrice } from '../core/pricing.js'
 import { sendTestNotification } from '../core/webhook.js'
+import { updateProxyServerConfig } from './proxy.js'
 
 const logger = createLogger('AdminRoute')
 const router: IRouter = Router()
@@ -41,6 +42,10 @@ router.put('/config', async (req: Request, res: Response) => {
   try {
     const updates = req.body
     const config = await configStore.updateGatewayConfig(updates)
+
+    // 热更新：配置保存后立即应用到运行中的 ProxyServer
+    await updateProxyServerConfig()
+
     res.json({ success: true, data: config } as ApiResponse)
   } catch (error) {
     logger.error('Failed to update config', { error: (error as Error).message })

@@ -62,6 +62,7 @@ export interface RateLimitConfig {
 export interface LogConfig {
   level: string
   maxEntries: number
+  dir: string
 }
 
 // JWT 配置
@@ -135,7 +136,8 @@ export function loadConfig(): Config {
     },
     log: {
       level: process.env.LOG_LEVEL || DEFAULT_LOG_CONFIG.level,
-      maxEntries: parseInt(process.env.LOG_MAX_ENTRIES || String(DEFAULT_LOG_CONFIG.maxEntries), 10)
+      maxEntries: parseInt(process.env.LOG_MAX_ENTRIES || String(DEFAULT_LOG_CONFIG.maxEntries), 10),
+      dir: process.env.LOG_DIR || DEFAULT_LOG_CONFIG.dir
     },
     accountPool: {
       cooldownMs: DEFAULT_ACCOUNT_POOL_CONFIG.cooldownMs,

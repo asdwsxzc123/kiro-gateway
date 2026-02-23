@@ -20,12 +20,26 @@ export interface AccountPoolStats {
   needsRefresh: boolean
 }
 
+export interface PoolConfig {
+  errorCooldownMs: number
+  maxConsecutiveErrors: number
+}
+
 export class AccountPool {
   private accounts: Map<string, ProxyAccount> = new Map()
   private accountStats: Map<string, AccountPoolStats> = new Map()
   private accountOrder: string[] = []
   // 每账号活跃请求数追踪（内存级，单实例无需 Redis）
   private activeConcurrency: Map<string, number> = new Map()
+  private poolConfig: PoolConfig = { errorCooldownMs: 60000, maxConsecutiveErrors: 3 }
+
+  /**
+   * 更新账号池配置（可热更新）
+   */
+  updatePoolConfig(config: Partial<PoolConfig>): void {
+    if (config.errorCooldownMs !== undefined) this.poolConfig.errorCooldownMs = config.errorCooldownMs
+    if (config.maxConsecutiveErrors !== undefined) this.poolConfig.maxConsecutiveErrors = config.maxConsecutiveErrors
+  }
 
   /**
    * 检查账号是否处于 active 状态（可参与调度）
@@ -207,12 +221,12 @@ export class AccountPool {
         // 配额错误，设置冷却时间
         const account = this.accounts.get(id)
         if (account) {
-          account.cooldownUntil = Date.now() + 60000 // 1 分钟冷却
+          account.cooldownUntil = Date.now() + this.poolConfig.errorCooldownMs
         }
       }
 
       // 连续错误过多，自动挂起
-      if (stats.errors >= 3) {
+      if (stats.errors >= this.poolConfig.maxConsecutiveErrors) {
         const account = this.accounts.get(id)
         if (account && account.status !== 'paused' && account.status !== 'suspended') {
           // 仅非手动暂停和非封号的账号才自动挂起
@@ -246,7 +260,7 @@ export class AccountPool {
       }
 
       // 连续错误过多，自动挂起
-      if (stats.errors >= 3) {
+      if (stats.errors >= this.poolConfig.maxConsecutiveErrors) {
         if (account && account.status !== 'paused' && account.status !== 'suspended') {
           this.setStatus(id, 'error_suspended')
         }
