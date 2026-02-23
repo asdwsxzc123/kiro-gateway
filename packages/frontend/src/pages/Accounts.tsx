@@ -62,6 +62,7 @@ type ProviderType = "BuilderId" | "Enterprise" | "Github" | "Google" | "IAM_SSO"
 
 // OIDC 表单数据类型
 interface OidcFormData {
+  alias: string
   authMethod: "social" | "idc"
   provider: ProviderType
   refreshToken: string
@@ -73,12 +74,14 @@ interface OidcFormData {
 
 // SSO 表单数据类型
 interface SsoFormData {
+  alias: string
   ssoTokens: string // 批量 token，每行一个
   region: string
 }
 
 // 初始 OIDC 表单数据
 const initialOidcForm: OidcFormData = {
+  alias: "",
   authMethod: "idc",
   provider: "Enterprise",
   refreshToken: "",
@@ -90,6 +93,7 @@ const initialOidcForm: OidcFormData = {
 
 // 初始 SSO 表单数据
 const initialSsoForm: SsoFormData = {
+  alias: "",
   ssoTokens: "",
   region: "us-east-1",
 }
@@ -109,6 +113,7 @@ const initialManualForm: AddAccountRequest = {
 
 // 编辑表单数据类型（所有字段可选，只提交修改的字段）
 interface EditFormData {
+  alias: string
   email: string
   userId: string
   accessToken: string
@@ -125,6 +130,7 @@ interface EditFormData {
 
 // 初始编辑表单数据
 const initialEditForm: EditFormData = {
+  alias: "",
   email: "",
   userId: "",
   accessToken: "",
@@ -567,6 +573,7 @@ export function Accounts() {
         clientSecret: oidcForm.clientSecret || undefined,
         region: oidcForm.region || "us-east-1",
         email: oidcForm.email || undefined,
+        alias: oidcForm.alias || undefined,
       }
       addMutation.mutate(request)
     } else if (importMode === "sso") {
@@ -593,6 +600,7 @@ export function Accounts() {
           accessToken: token,
           authMethod: "social",
           region: ssoForm.region,
+          alias: ssoForm.alias || undefined,
         }
         addMutation.mutate(request)
       }
@@ -620,6 +628,7 @@ export function Accounts() {
 
       // 预填充所有字段（包括敏感字段）
       setEditForm({
+        alias: fullAccount.alias || "",
         email: fullAccount.email || "",
         userId: fullAccount.userId || "",
         accessToken: fullAccount.accessToken || "",
@@ -653,6 +662,7 @@ export function Accounts() {
 
     // 构建更新数据，包含所有字段
     const updateData: Partial<AddAccountRequest> = {
+      alias: editForm.alias || undefined,
       email: editForm.email || undefined,
       region: editForm.region || undefined,
       authMethod: editForm.authMethod,
@@ -834,6 +844,19 @@ export function Accounts() {
         />
       </div>
 
+      {/* 别名 */}
+      <div className="grid gap-2">
+        <Label htmlFor="oidc-alias">别名 (可选)</Label>
+        <Input
+          id="oidc-alias"
+          placeholder="输入账号别名"
+          value={oidcForm.alias}
+          onChange={(e) =>
+            setOidcForm({ ...oidcForm, alias: e.target.value })
+          }
+        />
+      </div>
+
       {/* Email */}
       <div className="grid gap-2">
         <Label htmlFor="oidc-email">邮箱 (可选)</Label>
@@ -855,6 +878,19 @@ export function Accounts() {
    */
   const renderSsoForm = () => (
     <div className="grid gap-4">
+      {/* 别名 */}
+      <div className="grid gap-2">
+        <Label htmlFor="sso-alias">别名 (可选)</Label>
+        <Input
+          id="sso-alias"
+          placeholder="输入账号别名"
+          value={ssoForm.alias}
+          onChange={(e) =>
+            setSsoForm({ ...ssoForm, alias: e.target.value })
+          }
+        />
+      </div>
+
       {/* SSO Token 批量输入 */}
       <div className="grid gap-2">
         <Label htmlFor="sso-tokens">SSO Token *</Label>
@@ -892,6 +928,19 @@ export function Accounts() {
    */
   const renderManualForm = () => (
     <div className="grid gap-4">
+      {/* 别名 */}
+      <div className="grid gap-2">
+        <Label htmlFor="manual-alias">别名 (可选)</Label>
+        <Input
+          id="manual-alias"
+          placeholder="输入账号别名"
+          value={manualForm.alias || ""}
+          onChange={(e) =>
+            setManualForm({ ...manualForm, alias: e.target.value })
+          }
+        />
+      </div>
+
       {/* Access Token */}
       <div className="grid gap-2">
         <Label htmlFor="manual-accessToken">Access Token *</Label>
@@ -1130,6 +1179,19 @@ export function Accounts() {
           </DialogHeader>
 
           <div className="grid gap-4 py-4">
+            {/* 别名 */}
+            <div className="grid gap-2">
+              <Label htmlFor="edit-alias">别名 (可选)</Label>
+              <Input
+                id="edit-alias"
+                placeholder="输入账号别名"
+                value={editForm.alias}
+                onChange={(e) =>
+                  setEditForm({ ...editForm, alias: e.target.value })
+                }
+              />
+            </div>
+
             {/* 邮箱 */}
             <div className="grid gap-2">
               <Label htmlFor="edit-email">邮箱</Label>
@@ -1376,7 +1438,12 @@ export function Accounts() {
                 {mergedAccounts?.map((account) => (
                   <TableRow key={account.id}>
                     <TableCell className="font-medium">
-                      {account.email || account.id.slice(0, 12) + "..."}
+                      <div>
+                        {account.alias || account.email || account.id.slice(0, 12) + "..."}
+                        {account.alias && account.email && (
+                          <div className="text-xs text-muted-foreground font-normal">{account.email}</div>
+                        )}
+                      </div>
                     </TableCell>
                     <TableCell>
                       <span className="text-xs font-mono text-muted-foreground" title={account.machineId || ""}>

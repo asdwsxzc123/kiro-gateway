@@ -21,6 +21,7 @@ import type {
   KiroPayload,
   RequestLog
 } from './types.js'
+import { KiroApiError } from './types.js'
 import { AccountPool } from './accountPool.js'
 import {
   claudeToKiro,
@@ -40,8 +41,31 @@ import { calculateCost } from './pricing.js'
 import { calculateCacheRatio, splitTokensByRatio, estimateUserOnlyTokens, estimateRequestWeight, extractUserInputText } from './cacheTracker.js'
 import type { CacheRatio, CacheCalculation } from './cacheTracker.js'
 import { computeSessionHash, getSessionAccount, setSessionAccount } from './sessionCache.js'
+import { RequestQueue } from './requestQueue.js'
 
 const logger = createLogger('ProxyServer')
+
+// 计费 token 上限
+const MAX_BILLING_TOKENS_200K = 200000
+const MAX_BILLING_TOKENS_1M = 1000000
+
+/**
+ * 判断是否为 1M 上下文模型
+ */
+function is1MModel(model: string): boolean {
+  return /1m/i.test(model)
+}
+
+/**
+ * 限制计费 token 不超过模型上限
+ * 1M 模型上限 1000000，其他模型上限 200000
+ * 超出时返回上限 75%-99.5% 之间的随机值
+ */
+function capBillingTokens(tokens: number, model: string): number {
+  const max = is1MModel(model) ? MAX_BILLING_TOKENS_1M : MAX_BILLING_TOKENS_200K
+  if (tokens <= max) return tokens
+  return Math.floor(max * (0.75 + Math.random() * 0.245))
+}
 
 // 默认配置
 const DEFAULT_CONFIG: ProxyConfig = {
@@ -70,6 +94,12 @@ export interface ProxyServerEvents {
   onStatsUpdate?: (stats: ProxyStats) => void
 }
 
+export interface InflightRequest {
+  id: string
+  startTime: number
+  model: string
+}
+
 export class ProxyServer {
   private config: ProxyConfig
   private accountPool: AccountPool
@@ -77,12 +107,19 @@ export class ProxyServer {
   private events: ProxyServerEvents
   private refreshingTokens: Set<string> = new Set()
   private apiKeys: Map<string, ApiKey> = new Map()
+  private requestQueue: RequestQueue
+  private inflightRequests: Map<string, InflightRequest> = new Map()
 
   constructor(config: Partial<ProxyConfig> = {}, events: ProxyServerEvents = {}) {
     this.config = { ...DEFAULT_CONFIG, ...config }
     this.accountPool = new AccountPool()
     this.events = events
     this.stats = this.initStats()
+    this.requestQueue = new RequestQueue(this.config.maxConcurrent, {
+      enabled: this.config.queueEnabled,
+      maxSize: this.config.queueMaxSize,
+      timeoutMs: this.config.queueTimeoutMs
+    })
   }
 
   // 初始化统计
@@ -110,6 +147,11 @@ export class ProxyServer {
 
   updateConfig(updates: Partial<ProxyConfig>): void {
     this.config = { ...this.config, ...updates }
+    this.requestQueue.updateConfig(this.config.maxConcurrent, {
+      enabled: this.config.queueEnabled,
+      maxSize: this.config.queueMaxSize,
+      timeoutMs: this.config.queueTimeoutMs
+    })
     logger.info('Config updated', { updates })
   }
 
@@ -299,20 +341,40 @@ export class ProxyServer {
     return expiresAt - now < threshold
   }
 
-  // ============ 获取可用账号 ============
+  // ============ 统一账号调度 ============
 
   /**
-   * 获取可用账号
-   * @param boundAccountIds 绑定的账号 ID 列表（API Key 维度），为空则使用全局轮询
+   * 统一账号选择器
+   * 优先级：粘性会话 → 绑定账号子集(LRU+并发) → 全局共享池(LRU+并发)
+   * 同时处理 region 兜底和 Token 刷新
    */
-  async getAvailableAccount(boundAccountIds?: string[]): Promise<ProxyAccount | null> {
+  async selectAccount(
+    sessionHash?: string | null,
+    boundAccountIds?: string[]
+  ): Promise<ProxyAccount | null> {
     let account: ProxyAccount | null = null
 
-    // 如果指定了绑定账号，从子集中选择
-    if (boundAccountIds && boundAccountIds.length > 0) {
-      account = this.accountPool.getNextAccountFromSubset(boundAccountIds)
-    } else {
-      account = this.accountPool.getNextAccount()
+    // 1. 粘性会话绑定
+    if (sessionHash) {
+      const stickyAccountId = await getSessionAccount(sessionHash)
+      if (stickyAccountId) {
+        const inBoundList = !boundAccountIds || boundAccountIds.length === 0 || boundAccountIds.includes(stickyAccountId)
+        if (inBoundList) {
+          account = this.accountPool.getAccountIfAvailable(stickyAccountId)
+          if (account) {
+            logger.debug('Using sticky session account', { accountId: account.id })
+          }
+        }
+      }
+    }
+
+    // 2. 从绑定账号子集或全局池中选择（LRU + 并发感知）
+    if (!account) {
+      if (boundAccountIds && boundAccountIds.length > 0) {
+        account = this.accountPool.getNextAccountFromSubset(boundAccountIds)
+      } else {
+        account = this.accountPool.getNextAccount()
+      }
     }
 
     if (!account) {
@@ -322,23 +384,21 @@ export class ProxyServer {
       return null
     }
 
-    // Fallback: 账号没有自身 region 时使用全局默认 region
+    // 3. Region 兜底
     if (!account.region && this.config.defaultRegion) {
       account = { ...account, region: this.config.defaultRegion }
     }
 
-    // 检查是否需要刷新 Token
+    // 4. Token 刷新检查
     if (this.isTokenExpiringSoon(account) || needsTokenRefresh(account)) {
       logger.info('Token expiring soon, refreshing', { accountId: account.id })
       const refreshed = await this.refreshToken(account)
       if (!refreshed) {
-        // 刷新失败，尝试获取下一个账号
         const nextAccount = this.accountPool.getNextAvailableAccount(account.id)
         if (nextAccount) {
           return nextAccount
         }
       }
-      // 返回刷新后的账号
       return this.accountPool.getAccount(account.id)
     }
 
@@ -349,6 +409,13 @@ export class ProxyServer {
 
   getStats(): ProxyStats {
     return { ...this.stats }
+  }
+
+  /**
+   * 获取所有正在进行中的请求（用于死锁检测）
+   */
+  getInflightRequests(): InflightRequest[] {
+    return Array.from(this.inflightRequests.values())
   }
 
   resetStats(): void {
@@ -433,6 +500,30 @@ export class ProxyServer {
 
   // ============ 重试机制 ============
 
+  /**
+   * 获取错误对应的冷却时间（毫秒）
+   */
+  private getErrorCooldownMs(error: Error): number {
+    if (error instanceof KiroApiError) {
+      switch (error.errorCode) {
+        case 'QUOTA_EXHAUSTED':
+          return this.config.errorCooldown429 ?? 60000
+        case 'OVERLOADED':
+          return this.config.errorCooldown529 ?? 120000
+        case 'SERVER_ERROR':
+          return this.config.errorCooldown5xx ?? 15000
+        default:
+          return 0
+      }
+    }
+    // Fallback for plain Error: check message
+    const msg = error.message
+    if (msg.includes('429') || msg.includes('quota')) return this.config.errorCooldown429 ?? 60000
+    if (msg.includes('529') || msg.includes('overloaded')) return this.config.errorCooldown529 ?? 120000
+    if (msg.includes('500') || msg.includes('502') || msg.includes('503')) return this.config.errorCooldown5xx ?? 15000
+    return 0
+  }
+
   private async callWithRetry<T>(
     account: ProxyAccount,
     apiCall: (acc: ProxyAccount) => Promise<T>,
@@ -454,6 +545,19 @@ export class ProxyServer {
           accountId: currentAccount.id,
           error: errorMsg
         })
+
+        // 402: 月度用量耗尽，自动暂停并切换账号
+        if (errorMsg.includes('402') || errorMsg.includes('MONTHLY_REQUEST_COUNT')) {
+          this.accountPool.setStatus(currentAccount.id, 'paused')
+          accountStore.updateAccount(currentAccount.id, { status: 'paused' }).catch(() => {})
+          logger.warn('Account auto-paused due to monthly limit', { accountId: currentAccount.id })
+          const nextAccount = this.accountPool.getNextAvailableAccount(currentAccount.id)
+          if (nextAccount) {
+            currentAccount = nextAccount
+            continue
+          }
+          break
+        }
 
         // 检测账号被封禁（TEMPORARILY_SUSPENDED）
         if (errorMsg.includes('TEMPORARILY_SUSPENDED') || errorMsg.includes('temporarily is suspended')) {
@@ -482,7 +586,8 @@ export class ProxyServer {
 
         // 429: 配额耗尽，切换账号
         if (errorMsg.includes('429') || errorMsg.includes('quota')) {
-          this.accountPool.recordError(currentAccount.id, true)
+          const cooldownMs = this.getErrorCooldownMs(lastError!)
+          this.accountPool.recordErrorWithType(currentAccount.id, 'QUOTA_EXHAUSTED', cooldownMs)
 
           if (this.config.autoSwitchOnQuotaExhausted) {
             const nextAccount = this.accountPool.getNextAvailableAccount(currentAccount.id)
@@ -497,9 +602,27 @@ export class ProxyServer {
           }
         }
 
-        // 5xx: 服务器错误，延迟重试
+        // 529: 服务过载，较长退避 + jitter
+        if (errorMsg.includes('529') || errorMsg.includes('overloaded')) {
+          const cooldownMs529 = this.getErrorCooldownMs(lastError!)
+          this.accountPool.recordErrorWithType(currentAccount.id, 'OVERLOADED', cooldownMs529)
+          const baseDelay = this.config.retryDelayMs * Math.pow(2, attempt + 2)  // start higher for overload
+          const jitter = baseDelay * (0.8 + Math.random() * 0.4)
+          await new Promise(resolve => setTimeout(resolve, jitter))
+
+          // Try switching to a different account for overload
+          const nextAccount = this.accountPool.getNextAvailableAccount(currentAccount.id)
+          if (nextAccount) {
+            currentAccount = nextAccount
+          }
+          continue
+        }
+
+        // 5xx: 服务器错误，指数退避 + jitter 重试
         if (errorMsg.includes('500') || errorMsg.includes('502') || errorMsg.includes('503')) {
-          await new Promise(resolve => setTimeout(resolve, this.config.retryDelayMs * (attempt + 1)))
+          const baseDelay = this.config.retryDelayMs * Math.pow(2, attempt)
+          const jitter = baseDelay * (0.8 + Math.random() * 0.4)  // ±20% jitter
+          await new Promise(resolve => setTimeout(resolve, jitter))
           continue
         }
 
@@ -516,7 +639,36 @@ export class ProxyServer {
   async handleClaudeRequest(
     request: ClaudeRequest,
     _headers?: Record<string, string>,
-    boundAccountIds?: string[]
+    boundAccountIds?: string[],
+    signal?: AbortSignal
+  ): Promise<{ success: boolean; response?: unknown; error?: string }> {
+    let release: (() => void) | undefined
+    const reqId = uuidv4()
+    try {
+      release = await this.requestQueue.acquire(signal)
+      this.inflightRequests.set(reqId, {
+        id: reqId,
+        startTime: Date.now(),
+        model: request.model || 'unknown',
+      })
+      return await this._handleClaudeRequest(request, _headers, boundAccountIds, signal)
+    } catch (error) {
+      if (!release) {
+        // Queue full or timeout — not yet acquired
+        return { success: false, error: (error as Error).message }
+      }
+      throw error
+    } finally {
+      this.inflightRequests.delete(reqId)
+      release?.()
+    }
+  }
+
+  private async _handleClaudeRequest(
+    request: ClaudeRequest,
+    _headers?: Record<string, string>,
+    boundAccountIds?: string[],
+    signal?: AbortSignal
   ): Promise<{ success: boolean; response?: unknown; error?: string }> {
     this.recordNewRequest()
     this.events.onRequest?.({ path: '/v1/messages', method: 'POST' })
@@ -535,40 +687,23 @@ export class ProxyServer {
       messageCount: effectiveRequest.messages.length
     })
 
-    // Sticky Session: try routing to bound account
+    // 统一账号选择
     const sessionHash = computeSessionHash(effectiveRequest, _headers?.['x-session-id'])
-    let account: ProxyAccount | null = null
-
-    if (sessionHash) {
-      const stickyAccountId = await getSessionAccount(sessionHash)
-      if (stickyAccountId) {
-        // 如果 API Key 绑定了账号，sticky session 账号必须在绑定列表中
-        const inBoundList = !boundAccountIds || boundAccountIds.length === 0 || boundAccountIds.includes(stickyAccountId)
-        if (inBoundList) {
-          account = this.accountPool.getAccountIfAvailable(stickyAccountId)
-        }
-      }
-    }
-    if (!account) {
-      account = await this.getAvailableAccount(boundAccountIds)
-    }
+    const account = await this.selectAccount(sessionHash, boundAccountIds)
     if (!account) {
       this.recordRequestFailed()
       return { success: false, error: 'No available accounts' }
     }
 
-    // Fallback: sticky session 账号也需要 region 兜底
-    if (!account.region && this.config.defaultRegion) {
-      account = { ...account, region: this.config.defaultRegion }
-    }
-
+    // 追踪账号并发
+    this.accountPool.incrementConcurrency(account.id)
     const startTime = Date.now()
 
     try {
       const buildPayload = (acc: ProxyAccount) => claudeToKiro(effectiveRequest, acc.profileArn)
       const { result, account: usedAccount } = await this.callWithRetry(
         account,
-        async (acc) => callKiroApi(acc, buildPayload(acc), undefined, this.config.preferredEndpoint),
+        async (acc) => callKiroApi(acc, buildPayload(acc), signal, this.config.preferredEndpoint),
         '/v1/messages'
       )
 
@@ -584,11 +719,11 @@ export class ProxyServer {
       // 仅主题检测（haiku 无 tools）跳过计费和日志
       const skipBilling = topicDetection
 
-      // 用自计算的 input tokens 做 cache 拆分
+      // 用自计算的 input tokens 做 cache 拆分，并限制不超过 200k
       const cacheCalc = splitTokensByRatio(cacheRatio, selfInputTokens)
-      const uncachedInputTokens = userOnlyTokens ?? cacheCalc.uncachedTokens
-      const cacheWriteTokens = cacheCalc.cacheCreationTokens
-      const cacheReadTokens = cacheCalc.cacheReadTokens
+      const uncachedInputTokens = capBillingTokens(userOnlyTokens ?? cacheCalc.uncachedTokens, effectiveRequest.model)
+      const cacheWriteTokens = capBillingTokens(cacheCalc.cacheCreationTokens, effectiveRequest.model)
+      const cacheReadTokens = capBillingTokens(cacheCalc.cacheReadTokens, effectiveRequest.model)
       const totalInputTokens = uncachedInputTokens + cacheWriteTokens + cacheReadTokens
 
       logger.info('=== INPUT TOKEN DEBUG (non-stream) ===', {
@@ -609,8 +744,8 @@ export class ProxyServer {
         finalInputTokens: uncachedInputTokens,
         finalTotal: totalInputTokens
       })
-      // output tokens 由 kiroApi parseEventStream 自计算（tiktoken）
-      const outputTokens = result.usage.outputTokens
+      // output tokens 由 kiroApi parseEventStream 自计算（tiktoken），限制不超过 200k
+      const outputTokens = capBillingTokens(result.usage.outputTokens, effectiveRequest.model)
       const kiroCredits = result.usage.kiroCredits
 
       const response = kiroToClaudeResponse(
@@ -698,47 +833,23 @@ export class ProxyServer {
           logger.error('Failed to persist global stats', { error: (err as Error).message })
         })
 
-        // Update daily stats
+        // Update daily stats (fire-and-forget, 不阻塞响应)
         const today = new Date().toISOString().split('T')[0]
 
-        // 更新全局日统计
-        await dailyStatsStore.updateDailyGlobalStats(
-          today,
-          true,
-          uncachedInputTokens,
-          outputTokens,
-          0,
-          cost2.totalCost,
-          cacheWriteTokens,
-          cacheReadTokens
-        ).catch(err => {
-          logger.error('Failed to persist daily global stats', { error: (err as Error).message })
-        })
-
-        // 更新账号日统计
-        await dailyStatsStore.updateDailyAccountStats(
-          usedAccount.id,
-          today,
-          true,
-          uncachedInputTokens,
-          outputTokens,
-          Date.now() - startTime,
-          cost2.totalCost,
-          cacheWriteTokens,
-          cacheReadTokens
-        ).catch(err => {
-          logger.error('Failed to persist daily account stats', { error: (err as Error).message })
-        })
-
-        // 更新模型日统计
-        await dailyStatsStore.updateDailyModelStats(
-          effectiveRequest.model,
-          today,
-          uncachedInputTokens,
-          outputTokens,
-          cost2.totalCost
-        ).catch(err => {
-          logger.error('Failed to persist daily model stats', { error: (err as Error).message })
+        Promise.all([
+          dailyStatsStore.updateDailyGlobalStats(
+            today, true, uncachedInputTokens, outputTokens, 0,
+            cost2.totalCost, cacheWriteTokens, cacheReadTokens
+          ),
+          dailyStatsStore.updateDailyAccountStats(
+            usedAccount.id, today, true, uncachedInputTokens, outputTokens,
+            Date.now() - startTime, cost2.totalCost, cacheWriteTokens, cacheReadTokens
+          ),
+          dailyStatsStore.updateDailyModelStats(
+            effectiveRequest.model, today, uncachedInputTokens, outputTokens, cost2.totalCost
+          )
+        ]).catch(err => {
+          logger.error('Failed to persist daily stats', { error: (err as Error).message })
         })
       }
 
@@ -755,6 +866,8 @@ export class ProxyServer {
       })
 
       return { success: false, error: (error as Error).message }
+    } finally {
+      this.accountPool.decrementConcurrency(account.id)
     }
   }
 
@@ -769,40 +882,59 @@ export class ProxyServer {
     },
     headers?: Record<string, string>,
     matchedApiKey?: ApiKey,
-    boundAccountIds?: string[]
+    boundAccountIds?: string[],
+    signal?: AbortSignal
+  ): Promise<void> {
+    let release: (() => void) | undefined
+    const reqId = uuidv4()
+    try {
+      release = await this.requestQueue.acquire(signal)
+      this.inflightRequests.set(reqId, {
+        id: reqId,
+        startTime: Date.now(),
+        model: request.model || 'unknown',
+      })
+      await this._handleClaudeStreamRequest(request, callbacks, headers, matchedApiKey, boundAccountIds, signal)
+    } catch (error) {
+      if (!release) {
+        // Queue full or timeout — not yet acquired
+        callbacks.onError(error as Error)
+        return
+      }
+      throw error
+    } finally {
+      this.inflightRequests.delete(reqId)
+      release?.()
+    }
+  }
+
+  private async _handleClaudeStreamRequest(
+    request: ClaudeRequest,
+    callbacks: {
+      onChunk: (chunk: string) => void
+      onComplete: () => void
+      onError: (error: Error) => void
+    },
+    headers?: Record<string, string>,
+    matchedApiKey?: ApiKey,
+    boundAccountIds?: string[],
+    signal?: AbortSignal
   ): Promise<void> {
     this.recordNewRequest()
     this.events.onRequest?.({ path: '/v1/messages', method: 'POST' })
     const effectiveRequest = this.getEffectiveRequest(request)
 
-    // Sticky Session: try routing to bound account
+    // 统一账号选择
     const sessionHash = computeSessionHash(effectiveRequest, headers?.['x-session-id'])
-    let account: ProxyAccount | null = null
-
-    if (sessionHash) {
-      const stickyAccountId = await getSessionAccount(sessionHash)
-      if (stickyAccountId) {
-        // 如果 API Key 绑定了账号，sticky session 账号必须在绑定列表中
-        const inBoundList = !boundAccountIds || boundAccountIds.length === 0 || boundAccountIds.includes(stickyAccountId)
-        if (inBoundList) {
-          account = this.accountPool.getAccountIfAvailable(stickyAccountId)
-        }
-      }
-    }
-    if (!account) {
-      account = await this.getAvailableAccount(boundAccountIds)
-    }
+    const account = await this.selectAccount(sessionHash, boundAccountIds)
     if (!account) {
       this.recordRequestFailed()
       callbacks.onError(new Error('No available accounts'))
       return
     }
 
-    // Fallback: sticky session 账号也需要 region 兜底
-    if (!account.region && this.config.defaultRegion) {
-      account = { ...account, region: this.config.defaultRegion }
-    }
-
+    // 追踪账号并发
+    this.accountPool.incrementConcurrency(account.id)
     const startTime = Date.now()
 
     // 检查是否为 WebSearch 请求，完全绕过 Kiro generateAssistantResponse
@@ -812,6 +944,8 @@ export class ProxyServer {
         await handleWebSearchStream(effectiveRequest, account, callbacks, matchedApiKey)
       } catch (error) {
         callbacks.onError(error as Error)
+      } finally {
+        this.accountPool.decrementConcurrency(account.id)
       }
       return
     }
@@ -848,7 +982,7 @@ export class ProxyServer {
       const cacheRatio = await calculateCacheRatio(account.id, effectiveRequest)
       const estimatedTotalInputTokens = estimateRequestWeight(effectiveRequest)
       // Deterministic user-only tokens (no Redis dependency)
-      const userOnlyTokens = estimateUserOnlyTokens(effectiveRequest)
+      const userOnlyTokens = estimateUserOnlyTokens(effectiveRequest) ?? undefined
       // 提取用户输入内容
       const userInput = extractUserInputText(effectiveRequest)
 
@@ -911,7 +1045,8 @@ export class ProxyServer {
         userOnlyTokens,
         skipBilling,
         userInput,
-        topicDetection
+        topicDetection,
+        signal
       )
 
       callbacks.onComplete()
@@ -924,6 +1059,8 @@ export class ProxyServer {
       })
 
       callbacks.onError(error as Error)
+    } finally {
+      this.accountPool.decrementConcurrency(account.id)
     }
   }
 
@@ -946,10 +1083,11 @@ export class ProxyServer {
     cacheRatio?: CacheRatio | null,
     sessionHash?: string | null,
     estimatedTotalInputTokens?: number,
-    userOnlyTokens?: number | null,
+    userOnlyTokens?: number,
     skipBilling?: boolean,
     userInput?: string,
-    skipRecording?: boolean
+    skipRecording?: boolean,
+    signal?: AbortSignal
   ): Promise<void> {
     const id = msgId || `msg_${uuidv4()}`
     let currentBlockIndex = contentBlockIndex
@@ -1112,10 +1250,10 @@ export class ProxyServer {
           stop_reason: null,
           stop_sequence: null,
           usage: {
-            input_tokens: userOnlyTokens ?? estimatedCacheCalc?.uncachedTokens ?? estimatedInputTokens,
+            input_tokens: capBillingTokens(userOnlyTokens ?? estimatedCacheCalc?.uncachedTokens ?? estimatedInputTokens, model),
             output_tokens: 0,
-            cache_creation_input_tokens: estimatedCacheCalc?.cacheCreationTokens ?? 0,
-            cache_read_input_tokens: estimatedCacheCalc?.cacheReadTokens ?? 0
+            cache_creation_input_tokens: capBillingTokens(estimatedCacheCalc?.cacheCreationTokens ?? 0, model),
+            cache_read_input_tokens: capBillingTokens(estimatedCacheCalc?.cacheReadTokens ?? 0, model)
           }
         }
       })
@@ -1188,20 +1326,20 @@ export class ProxyServer {
             currentBlockIndex++
           }
 
-          // 自计算 token：input 使用预算值，output 由 kiroApi 自计算
-          const outputTokens = usage.outputTokens
+          // 自计算 token：input 使用预算值，output 由 kiroApi 自计算，限制不超过 200k
+          const outputTokens = capBillingTokens(usage.outputTokens, model)
           const kiroCredits = usage.kiroCredits
 
-          // 用自计算的 input tokens 做 cache 拆分
+          // 用自计算的 input tokens 做 cache 拆分，限制不超过模型上限
           let cacheCalc: CacheCalculation | null = null
           if (cacheRatio) {
             cacheCalc = splitTokensByRatio(cacheRatio, estimatedInputTokens)
-            this.stats.cacheCreationTokens += cacheCalc.cacheCreationTokens
-            this.stats.cacheReadTokens += cacheCalc.cacheReadTokens
+            this.stats.cacheCreationTokens += capBillingTokens(cacheCalc.cacheCreationTokens, model)
+            this.stats.cacheReadTokens += capBillingTokens(cacheCalc.cacheReadTokens, model)
           }
-          const cacheWriteTokens = cacheCalc?.cacheCreationTokens ?? 0
-          const cacheReadTokens = cacheCalc?.cacheReadTokens ?? 0
-          const uncachedInputTokens = userOnlyTokens ?? cacheCalc?.uncachedTokens ?? estimatedInputTokens
+          const cacheWriteTokens = capBillingTokens(cacheCalc?.cacheCreationTokens ?? 0, model)
+          const cacheReadTokens = capBillingTokens(cacheCalc?.cacheReadTokens ?? 0, model)
+          const uncachedInputTokens = capBillingTokens(userOnlyTokens ?? cacheCalc?.uncachedTokens ?? estimatedInputTokens, model)
           const totalInputTokens = uncachedInputTokens + cacheWriteTokens + cacheReadTokens
 
           logger.info('=== STREAM TOKEN DECISION (completion) ===', {
@@ -1282,47 +1420,23 @@ export class ProxyServer {
               logger.error('Failed to persist global stats', { error: (err as Error).message })
             })
 
-            // Update daily stats
+            // Update daily stats (fire-and-forget, 不阻塞流式响应)
             const today = new Date().toISOString().split('T')[0]
 
-            // 更新全局日统计
-            await dailyStatsStore.updateDailyGlobalStats(
-              today,
-              true,
-              uncachedInputTokens,
-              outputTokens,
-              0,
-              costStream2.totalCost,
-              cacheWriteTokens,
-              cacheReadTokens
-            ).catch(err => {
-              logger.error('Failed to persist daily global stats', { error: (err as Error).message })
-            })
-
-            // 更新账号日统计
-            await dailyStatsStore.updateDailyAccountStats(
-              account.id,
-              today,
-              true,
-              uncachedInputTokens,
-              outputTokens,
-              Date.now() - startTime,
-              costStream2.totalCost,
-              cacheWriteTokens,
-              cacheReadTokens
-            ).catch(err => {
-              logger.error('Failed to persist daily account stats', { error: (err as Error).message })
-            })
-
-            // 更新模型日统计
-            await dailyStatsStore.updateDailyModelStats(
-              model,
-              today,
-              uncachedInputTokens,
-              outputTokens,
-              costStream2.totalCost
-            ).catch(err => {
-              logger.error('Failed to persist daily model stats', { error: (err as Error).message })
+            Promise.all([
+              dailyStatsStore.updateDailyGlobalStats(
+                today, true, uncachedInputTokens, outputTokens, 0,
+                costStream2.totalCost, cacheWriteTokens, cacheReadTokens
+              ),
+              dailyStatsStore.updateDailyAccountStats(
+                account.id, today, true, uncachedInputTokens, outputTokens,
+                Date.now() - startTime, costStream2.totalCost, cacheWriteTokens, cacheReadTokens
+              ),
+              dailyStatsStore.updateDailyModelStats(
+                model, today, uncachedInputTokens, outputTokens, costStream2.totalCost
+              )
+            ]).catch(err => {
+              logger.error('Failed to persist daily stats', { error: (err as Error).message })
             })
 
             if (matchedApiKey) {
@@ -1397,7 +1511,8 @@ export class ProxyServer {
                 undefined,     // userOnlyTokens
                 skipBilling,   // preserve billing flag
                 userInput,     // preserve user input
-                skipRecording  // preserve recording flag
+                skipRecording, // preserve recording flag
+                signal         // propagate abort signal
               )
             } catch (error) {
               logger.error('Claude auto-continue error', { error: (error as Error).message })
@@ -1429,6 +1544,14 @@ export class ProxyServer {
         },
         (error) => {
           logger.error('Claude stream error', { error: error.message })
+
+          // 402 月度用量耗尽，自动暂停
+          if (error.message.includes('402') || error.message.includes('MONTHLY_REQUEST_COUNT')) {
+            this.accountPool.setStatus(account.id, 'paused')
+            accountStore.updateAccount(account.id, { status: 'paused' }).catch(() => {})
+            logger.warn('Account auto-paused due to monthly limit (stream)', { accountId: account.id })
+          }
+
           const errorEvent = createClaudeStreamEvent('error', {
             error: { type: 'api_error', message: error.message }
           })
@@ -1438,7 +1561,7 @@ export class ProxyServer {
           this.accountPool.recordError(account.id, error.message.includes('429'))
           reject(error)
         },
-        undefined,
+        signal,
         this.config.preferredEndpoint
       )
     })

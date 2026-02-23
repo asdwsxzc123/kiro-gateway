@@ -12,6 +12,7 @@ import type { ClaudeRequest } from '../core/types.js'
 import * as accountStore from '../storage/accountStore.js'
 import * as configStore from '../storage/configStore.js'
 import { countAllTokens } from '../core/tokenCounter.js'
+import { findModelPrice } from '../core/pricing.js'
 
 const logger = createLogger('ProxyRoute')
 const router: IRouter = Router()
@@ -75,6 +76,14 @@ export async function refreshProxyServerAccounts(): Promise<void> {
 }
 
 /**
+ * 获取当前所有进行中的请求（用于死锁检测）
+ */
+export function getInflightRequests(): import('../core/proxyServer.js').InflightRequest[] {
+  if (!proxyServer) return []
+  return proxyServer.getInflightRequests()
+}
+
+/**
  * Claude Messages API
  * POST /v1/messages
  */
@@ -110,6 +119,17 @@ router.post('/messages', async (req: Request, res: Response) => {
     logger.warn('No tools in request - AI will not be able to call tools!')
   }
 
+  // 客户端断开检测：创建 AbortController，客户端断开时取消上游请求
+  const abortController = new AbortController()
+  let clientDisconnected = false
+  req.on('close', () => {
+    if (!res.writableEnded) {
+      clientDisconnected = true
+      abortController.abort()
+      logger.info('Client disconnected, aborting upstream request', { model: request.model })
+    }
+  })
+
   try {
     const server = await getProxyServer()
 
@@ -136,31 +156,40 @@ router.post('/messages', async (req: Request, res: Response) => {
         request,
         {
           onChunk: (chunk) => {
-            res.write(chunk)
+            if (!clientDisconnected) {
+              res.write(chunk)
+            }
           },
           onComplete: () => {
-            res.end()
+            if (!clientDisconnected) {
+              res.end()
+            }
           },
           onError: (error) => {
-            logger.error('Stream error', { error: error.message })
-            res.end()
+            if (!clientDisconnected) {
+              logger.error('Stream error', { error: error.message })
+              res.end()
+            }
           }
         },
         headers,
         undefined,         // matchedApiKey
-        boundAccountIds    // 绑定的账号 ID 列表
+        boundAccountIds,   // 绑定的账号 ID 列表
+        abortController.signal  // AbortSignal for client disconnect
       )
     } else {
       // 非流式响应
-      const result = await server.handleClaudeRequest(request, headers, boundAccountIds)
+      const result = await server.handleClaudeRequest(request, headers, boundAccountIds, abortController.signal)
 
-      if (result.success && result.response) {
-        res.json(result.response)
-      } else {
-        res.status(500).json({
-          type: 'error',
-          error: { type: 'api_error', message: result.error || 'Unknown error' }
-        })
+      if (!clientDisconnected) {
+        if (result.success && result.response) {
+          res.json(result.response)
+        } else {
+          res.status(500).json({
+            type: 'error',
+            error: { type: 'api_error', message: result.error || 'Unknown error' }
+          })
+        }
       }
     }
   } catch (error) {
@@ -207,15 +236,26 @@ router.post('/messages/count_tokens', async (req: Request, res: Response) => {
  * GET /v1/models
  */
 router.get('/models', (_req: Request, res: Response) => {
-  const models = [
-    { id: 'claude-opus-4.6', object: 'model', owned_by: 'kiro' },
-    { id: 'claude-opus-4.6-1m', object: 'model', owned_by: 'kiro' },
-    { id: 'claude-sonnet-4.5', object: 'model', owned_by: 'kiro' },
-    { id: 'claude-sonnet-4', object: 'model', owned_by: 'kiro' },
-    { id: 'claude-haiku-4.5', object: 'model', owned_by: 'kiro' },
-    { id: 'claude-opus-4.6', object: 'model', owned_by: 'kiro' },
-    { id: 'claude-opus-4.5', object: 'model', owned_by: 'kiro' }
+  const modelIds = [
+    'claude-opus-4.6',
+    'claude-opus-4.6-1m',
+    'claude-sonnet-4.6',
+    'claude-sonnet-4.5',
+    'claude-sonnet-4',
+    'claude-haiku-4.5',
+    'claude-opus-4.5'
   ]
+
+  const models = modelIds.map(id => {
+    const price = findModelPrice(id)
+    return {
+      id,
+      object: 'model',
+      owned_by: 'kiro',
+      max_input_tokens: price.max_input_tokens,
+      max_output_tokens: price.max_output_tokens
+    }
+  })
 
   res.json({
     object: 'list',

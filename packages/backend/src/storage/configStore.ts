@@ -5,6 +5,7 @@
 
 import { getRedisClient } from './redis.js'
 import { createLogger } from '../utils/logger.js'
+import type { WebhookConfig } from '@kiro-gateway/shared'
 
 const logger = createLogger('ConfigStore')
 
@@ -36,6 +37,7 @@ export interface GatewayConfig {
   rateLimitEnabled: boolean
   rateLimitWindow: number
   rateLimitMax: number
+
 }
 
 const DEFAULT_CONFIG: GatewayConfig = {
@@ -351,5 +353,69 @@ export async function removeAccountFromApiKeys(accountId: string): Promise<numbe
   } catch (error) {
     logger.error('Failed to remove account from API keys', { error: (error as Error).message })
     return 0
+  }
+}
+
+// ============ Webhook 配置 ============
+
+const WEBHOOK_CONFIG_KEY = 'webhook_config'
+
+const DEFAULT_WEBHOOK_CONFIG: WebhookConfig = {
+  enabled: false,
+  usageThreshold: 0,
+  notifyOnAccountError: false,
+  notifyOnTokenRefreshFail: false,
+  notifyHeartbeat: false,
+  platforms: [],
+}
+
+/**
+ * 获取 Webhook 配置（首次访问时自动从旧字段迁移）
+ */
+export async function getWebhookConfig(): Promise<WebhookConfig> {
+  const redis = getRedisClient()
+
+  try {
+    const raw = await redis.get(WEBHOOK_CONFIG_KEY)
+    if (raw) return JSON.parse(raw) as WebhookConfig
+
+    // 自动迁移旧配置
+    const oldData = await redis.hgetall(CONFIG_KEY)
+    const migrated: WebhookConfig = {
+      enabled: !!oldData?.webhookUrl,
+      usageThreshold: oldData?.webhookUsageThreshold ? parseInt(oldData.webhookUsageThreshold, 10) : 0,
+      notifyOnAccountError: oldData?.webhookOnAccountError === 'true',
+      notifyOnTokenRefreshFail: false,
+      notifyHeartbeat: false,
+      platforms: oldData?.webhookUrl
+        ? [{ platform: 'feishu', enabled: true, url: oldData.webhookUrl, label: 'Default' }]
+        : [],
+    }
+
+    await redis.set(WEBHOOK_CONFIG_KEY, JSON.stringify(migrated))
+    if (oldData?.webhookUrl) {
+      await redis.hdel(CONFIG_KEY, 'webhookUrl', 'webhookUsageThreshold', 'webhookOnAccountError')
+    }
+
+    return migrated
+  } catch (error) {
+    logger.error('Failed to get webhook config', { error: (error as Error).message })
+    return { ...DEFAULT_WEBHOOK_CONFIG }
+  }
+}
+
+/**
+ * 更新 Webhook 配置
+ */
+export async function updateWebhookConfig(config: WebhookConfig): Promise<WebhookConfig> {
+  const redis = getRedisClient()
+
+  try {
+    await redis.set(WEBHOOK_CONFIG_KEY, JSON.stringify(config))
+    logger.info('Webhook config updated')
+    return config
+  } catch (error) {
+    logger.error('Failed to update webhook config', { error: (error as Error).message })
+    throw error
   }
 }

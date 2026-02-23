@@ -7,7 +7,7 @@ FROM node:20-alpine AS frontend-builder
 WORKDIR /app
 
 # 安装 pnpm
-RUN corepack enable && corepack prepare pnpm@latest --activate
+RUN corepack enable && corepack prepare pnpm@9.0.0 --activate
 
 # 复制 workspace 配置
 COPY pnpm-workspace.yaml package.json pnpm-lock.yaml ./
@@ -15,7 +15,7 @@ COPY packages/shared/package.json ./packages/shared/
 COPY packages/frontend/package.json ./packages/frontend/
 
 # 安装依赖
-RUN pnpm install
+RUN pnpm install --frozen-lockfile
 
 # 复制源代码
 COPY packages/shared ./packages/shared
@@ -35,7 +35,7 @@ FROM node:20-alpine AS backend-builder
 WORKDIR /app
 
 # 安装 pnpm
-RUN corepack enable && corepack prepare pnpm@latest --activate
+RUN corepack enable && corepack prepare pnpm@9.0.0 --activate
 
 # 复制 workspace 配置
 COPY pnpm-workspace.yaml package.json pnpm-lock.yaml ./
@@ -43,7 +43,7 @@ COPY packages/shared/package.json ./packages/shared/
 COPY packages/backend/package.json ./packages/backend/
 
 # 安装依赖
-RUN pnpm install
+RUN pnpm install --frozen-lockfile
 
 # 复制源代码
 COPY packages/shared ./packages/shared
@@ -63,7 +63,7 @@ FROM node:20-alpine AS production
 WORKDIR /app
 
 # 安装 pnpm
-RUN corepack enable && corepack prepare pnpm@latest --activate
+RUN corepack enable && corepack prepare pnpm@9.0.0 --activate
 
 # 设置环境变量
 ENV NODE_ENV=production
@@ -74,7 +74,7 @@ COPY packages/shared/package.json ./packages/shared/
 COPY packages/backend/package.json ./packages/backend/
 
 # 只安装生产依赖
-RUN pnpm install --prod
+RUN pnpm install --prod --frozen-lockfile
 
 # 复制 shared 源码（运行时需要）
 COPY packages/shared ./packages/shared

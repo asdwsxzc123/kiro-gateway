@@ -50,6 +50,8 @@ pnpm typecheck            # 全量类型检查
 - **Rate Limiting**: express-rate-limit + rate-limit-redis
 - **Encryption**: bcryptjs, custom AES crypto utils
 
+### 账户相关
+- 只要账户状态变更，都需要推送 notify
 ### Directory Layout
 
 ```

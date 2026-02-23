@@ -34,13 +34,18 @@ export async function refreshOidcToken(
   }
 
   try {
+    const controller = new AbortController()
+    const timeout = setTimeout(() => controller.abort(), 10000)
+
     const response = await fetch(url, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json'
       },
-      body: JSON.stringify(payload)
+      body: JSON.stringify(payload),
+      signal: controller.signal
     })
+    clearTimeout(timeout)
 
     if (!response.ok) {
       const errorText = await response.text()
@@ -86,6 +91,9 @@ export async function refreshSocialToken(
   const url = `${KIRO_AUTH_ENDPOINT}/refreshToken`
 
   try {
+    const controller = new AbortController()
+    const timeout = setTimeout(() => controller.abort(), 10000)
+
     const response = await fetch(url, {
       method: 'POST',
       headers: {
@@ -93,8 +101,10 @@ export async function refreshSocialToken(
         // 关键修复：使用包含 machineId 的 User-Agent（与 kiro-m 保持一致）
         'User-Agent': getKiroUserAgent(machineId)
       },
-      body: JSON.stringify({ refreshToken })
+      body: JSON.stringify({ refreshToken }),
+      signal: controller.signal
     })
+    clearTimeout(timeout)
 
     if (!response.ok) {
       const errorText = await response.text()
