@@ -324,7 +324,7 @@ export class ProxyServer {
           expiresAt: result.expiresAt
         })
         this.accountPool.clearNeedsRefresh(account.id)
-        this.accountPool.setStatus(account.id, 'active')
+        this.accountPool.setStatus(account.id, 'active', 'Token 刷新成功')
         logger.info('Token refreshed successfully', { accountId: account.id })
         return true
       } else {
@@ -554,8 +554,8 @@ export class ProxyServer {
 
         // 402: 月度用量耗尽，自动暂停并切换账号
         if (errorMsg.includes('402') || errorMsg.includes('MONTHLY_REQUEST_COUNT')) {
-          this.accountPool.setStatus(currentAccount.id, 'paused')
-          accountStore.updateAccount(currentAccount.id, { status: 'paused' }).catch(() => {})
+          this.accountPool.setStatus(currentAccount.id, 'paused', '月度用量耗尽 (402)')
+          accountStore.updateAccount(currentAccount.id, { status: 'paused', statusReason: '月度用量耗尽 (402)' }).catch(() => {})
           logger.warn('Account auto-paused due to monthly limit', { accountId: currentAccount.id })
           const nextAccount = this.accountPool.getNextAvailableAccount(currentAccount.id)
           if (nextAccount) {
@@ -567,8 +567,8 @@ export class ProxyServer {
 
         // 检测账号被封禁（TEMPORARILY_SUSPENDED）
         if (errorMsg.includes('TEMPORARILY_SUSPENDED') || errorMsg.includes('temporarily is suspended')) {
-          this.accountPool.setStatus(currentAccount.id, 'suspended')
-          accountStore.updateAccount(currentAccount.id, { status: 'suspended' }).catch(() => {})
+          this.accountPool.setStatus(currentAccount.id, 'suspended', '账号被封禁 (TEMPORARILY_SUSPENDED)')
+          accountStore.updateAccount(currentAccount.id, { status: 'suspended', statusReason: '账号被封禁 (TEMPORARILY_SUSPENDED)' }).catch(() => {})
           logger.warn('Account suspended (banned by Kiro), switching account', { accountId: currentAccount.id })
           const nextAccount = this.accountPool.getNextAvailableAccount(currentAccount.id)
           if (nextAccount) {
@@ -647,7 +647,7 @@ export class ProxyServer {
     _headers?: Record<string, string>,
     boundAccountIds?: string[],
     signal?: AbortSignal
-  ): Promise<{ success: boolean; response?: unknown; error?: string }> {
+  ): Promise<{ success: boolean; response?: unknown; error?: string; statusCode?: number }> {
     let release: (() => void) | undefined
     const reqId = uuidv4()
     try {
@@ -661,7 +661,8 @@ export class ProxyServer {
     } catch (error) {
       if (!release) {
         // Queue full or timeout — not yet acquired
-        return { success: false, error: (error as Error).message }
+        const statusCode = error instanceof KiroApiError ? error.statusCode : 500
+        return { success: false, error: (error as Error).message, statusCode }
       }
       throw error
     } finally {
@@ -675,7 +676,7 @@ export class ProxyServer {
     _headers?: Record<string, string>,
     boundAccountIds?: string[],
     signal?: AbortSignal
-  ): Promise<{ success: boolean; response?: unknown; error?: string }> {
+  ): Promise<{ success: boolean; response?: unknown; error?: string; statusCode?: number }> {
     this.recordNewRequest()
     this.events.onRequest?.({ path: '/v1/messages', method: 'POST' })
     const effectiveRequest = this.getEffectiveRequest(request)
@@ -864,14 +865,15 @@ export class ProxyServer {
       this.recordRequestFailed()
       this.accountPool.recordError(account.id, false)
 
+      const statusCode = error instanceof KiroApiError ? error.statusCode : 500
       this.events.onResponse?.({
         path: '/v1/messages',
         model: effectiveRequest.model,
-        status: 500,
+        status: statusCode,
         error: (error as Error).message
       })
 
-      return { success: false, error: (error as Error).message }
+      return { success: false, error: (error as Error).message, statusCode }
     } finally {
       this.accountPool.decrementConcurrency(account.id)
     }
@@ -1058,10 +1060,11 @@ export class ProxyServer {
 
       callbacks.onComplete()
     } catch (error) {
+      const statusCode = error instanceof KiroApiError ? error.statusCode : 500
       this.events.onResponse?.({
         path: '/v1/messages',
         model: effectiveRequest.model,
-        status: 500,
+        status: statusCode,
         error: (error as Error).message
       })
 
@@ -1556,8 +1559,8 @@ export class ProxyServer {
 
           // 402 月度用量耗尽，自动暂停
           if (error.message.includes('402') || error.message.includes('MONTHLY_REQUEST_COUNT')) {
-            this.accountPool.setStatus(account.id, 'paused')
-            accountStore.updateAccount(account.id, { status: 'paused' }).catch(() => {})
+            this.accountPool.setStatus(account.id, 'paused', '月度用量耗尽 (402 stream)')
+            accountStore.updateAccount(account.id, { status: 'paused', statusReason: '月度用量耗尽 (402 stream)' }).catch(() => {})
             logger.warn('Account auto-paused due to monthly limit (stream)', { accountId: account.id })
           }
 

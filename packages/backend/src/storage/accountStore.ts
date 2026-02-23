@@ -53,7 +53,7 @@ function deserializeAccount(data: Record<string, string>): ProxyAccount {
   for (const [key, value] of Object.entries(data)) {
     if (SENSITIVE_FIELDS.includes(key)) {
       (account as Record<string, unknown>)[key] = decrypt(value)
-    } else if (['expiresAt', 'lastUsed', 'requestCount', 'errorCount', 'cooldownUntil', 'createdAt', 'machineIdCreatedAt'].includes(key)) {
+    } else if (['expiresAt', 'lastUsed', 'requestCount', 'errorCount', 'cooldownUntil', 'createdAt', 'machineIdCreatedAt', 'statusChangedAt'].includes(key)) {
       (account as Record<string, unknown>)[key] = parseInt(value, 10)
     } else {
       (account as Record<string, unknown>)[key] = value
@@ -166,7 +166,8 @@ export async function addAccount(request: AddAccountRequest): Promise<ProxyAccou
     status: 'active',
     errorCount: 0,
     requestCount: 0,
-    createdAt: now
+    createdAt: now,
+    statusChangedAt: now
   }
 
   try {
@@ -207,6 +208,14 @@ export async function updateAccount(id: string, updates: UpdateAccountRequest): 
       // 移除旧机器码，添加新机器码
       await redis.srem(MACHINE_IDS, existing.machineId)
       await redis.sadd(MACHINE_IDS, updates.machineId)
+    }
+
+    // 状态变更时自动记录时间戳；恢复 active 时清除原因
+    if (updates.status !== undefined && updates.status !== existing.status) {
+      updates.statusChangedAt = Date.now()
+      if (updates.status === 'active') {
+        updates.statusReason = ''
+      }
     }
 
     const updated: ProxyAccount = { ...existing, ...updates }

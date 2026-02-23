@@ -87,6 +87,8 @@ export interface Account {
   status?: AccountStatus;
   cooldownUntil?: number;
   createdAt?: number;
+  statusChangedAt?: number;
+  statusReason?: string;
 }
 
 export interface AddAccountRequest {

@@ -349,13 +349,14 @@ export function Accounts() {
   const testMutation = useMutation({
     mutationFn: testAccount,
     onSuccess: (data) => {
-      // 显示测试结果：模型和响应内容
+      queryClient.invalidateQueries({ queryKey: ["accounts"] })
       toast({
         title: "测试成功",
         description: `模型: ${data.model}\n响应: ${data.response.slice(0, 100)}${data.response.length > 100 ? '...' : ''}`,
       })
     },
     onError: (error: Error) => {
+      queryClient.invalidateQueries({ queryKey: ["accounts"] })
       toast({
         title: "测试失败",
         description: error.message,
@@ -1467,6 +1468,12 @@ export function Accounts() {
                       >
                         {account.status === 'active' ? "正常" : account.status === 'paused' ? "已暂停" : account.status === 'suspended' ? "已封号" : "异常挂起"}
                       </span>
+                      {account.status !== 'active' && (account.statusChangedAt || account.statusReason) && (
+                        <div className="text-xs text-muted-foreground mt-0.5">
+                          {account.statusChangedAt && new Date(account.statusChangedAt).toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" })}
+                          {account.statusReason && <span className="ml-1">{account.statusReason}</span>}
+                        </div>
+                      )}
                     </TableCell>
                     <TableCell>
                       <span className="text-sm">{formatUsage(account.id)}</span>

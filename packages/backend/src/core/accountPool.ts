@@ -204,7 +204,7 @@ export class AccountPool {
       account.requestCount = (account.requestCount || 0) + 1
       // 仅从 error_suspended 自动恢复，手动 paused 和封号 suspended 不自动恢复
       if (account.status === 'error_suspended') {
-        this.setStatus(id, 'active')
+        this.setStatus(id, 'active', '请求成功自动恢复')
       }
     }
   }
@@ -230,7 +230,7 @@ export class AccountPool {
         const account = this.accounts.get(id)
         if (account && account.status !== 'paused' && account.status !== 'suspended') {
           // 仅非手动暂停和非封号的账号才自动挂起
-          this.setStatus(id, 'error_suspended')
+          this.setStatus(id, 'error_suspended', `连续错误 ${stats.errors} 次`)
         }
       }
     }
@@ -262,7 +262,7 @@ export class AccountPool {
       // 连续错误过多，自动挂起
       if (stats.errors >= this.poolConfig.maxConsecutiveErrors) {
         if (account && account.status !== 'paused' && account.status !== 'suspended') {
-          this.setStatus(id, 'error_suspended')
+          this.setStatus(id, 'error_suspended', `连续错误 ${stats.errors} 次`)
         }
       }
     }
@@ -295,10 +295,12 @@ export class AccountPool {
   /**
    * 设置账号调度状态
    */
-  setStatus(id: string, status: AccountStatus): void {
+  setStatus(id: string, status: AccountStatus, reason?: string): void {
     const account = this.accounts.get(id)
     if (account) {
       account.status = status
+      account.statusChangedAt = Date.now()
+      account.statusReason = reason || ''
     }
 
     // 恢复到 active 时重置错误计数
@@ -477,7 +479,7 @@ export class AccountPool {
       // 重置统计时恢复所有非手动暂停的账号
       const account = this.accounts.get(id)
       if (account && account.status === 'error_suspended') {
-        this.setStatus(id, 'active')
+        this.setStatus(id, 'active', '统计重置自动恢复')
       }
     }
   }

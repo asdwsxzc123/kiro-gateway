@@ -8,7 +8,7 @@ import { Router, Request, Response } from 'express'
 import type { Router as IRouter } from 'express'
 import { createLogger } from '../utils/logger.js'
 import { ProxyServer } from '../core/proxyServer.js'
-import type { ClaudeRequest } from '../core/types.js'
+import { KiroApiError, type ClaudeRequest } from '../core/types.js'
 import * as accountStore from '../storage/accountStore.js'
 import * as configStore from '../storage/configStore.js'
 import { countAllTokens } from '../core/tokenCounter.js'
@@ -16,6 +16,40 @@ import { findModelPrice } from '../core/pricing.js'
 
 const logger = createLogger('ProxyRoute')
 const router: IRouter = Router()
+
+/**
+ * 从错误中提取 HTTP 状态码
+ * 429 → 429 (rate limit / quota exhausted)
+ * 529 → 529 (overloaded)
+ * 402 → 402 (monthly limit)
+ * 401/403 → 401/403 (auth error)
+ * 其他 → 原始状态码或 500
+ */
+function getHttpStatusFromError(error: Error): number {
+  if (error instanceof KiroApiError) {
+    return error.statusCode
+  }
+  const msg = error.message
+  if (msg.includes('429') || msg.includes('quota')) return 429
+  if (msg.includes('529') || msg.includes('overloaded')) return 529
+  if (msg.includes('402') || msg.includes('MONTHLY_REQUEST_COUNT')) return 402
+  if (msg.includes('No available accounts')) return 503
+  return 500
+}
+
+/**
+ * 将 HTTP 状态码映射为 Claude API 错误类型
+ */
+function getClaudeErrorType(statusCode: number): string {
+  switch (statusCode) {
+    case 429: return 'rate_limit_error'
+    case 529: return 'overloaded_error'
+    case 402: return 'rate_limit_error'
+    case 401: case 403: return 'authentication_error'
+    case 503: return 'api_error'
+    default: return 'api_error'
+  }
+}
 
 // 创建 ProxyServer 实例
 let proxyServer: ProxyServer | null = null
@@ -207,8 +241,26 @@ router.post('/messages', async (req: Request, res: Response) => {
           },
           onError: (error) => {
             if (!clientDisconnected) {
-              logger.error('Stream error', { error: error.message })
-              res.end()
+              const statusCode = getHttpStatusFromError(error)
+              const errorType = getClaudeErrorType(statusCode)
+              logger.error('Stream error', { error: error.message, statusCode })
+
+              if (!res.headersSent) {
+                // Headers 未发送，直接返回 JSON 错误响应
+                res.setHeader('Content-Type', 'application/json')
+                res.status(statusCode).json({
+                  type: 'error',
+                  error: { type: errorType, message: error.message }
+                })
+              } else {
+                // 已发送 SSE headers，通过 SSE event 发送错误
+                const errorEvent = JSON.stringify({
+                  type: 'error',
+                  error: { type: errorType, message: error.message }
+                })
+                res.write(`event: error\ndata: ${errorEvent}\n\n`)
+                res.end()
+              }
             }
           }
         },
@@ -225,18 +277,22 @@ router.post('/messages', async (req: Request, res: Response) => {
         if (result.success && result.response) {
           res.json(result.response)
         } else {
-          res.status(500).json({
+          const statusCode = result.statusCode || 500
+          const errorType = getClaudeErrorType(statusCode)
+          res.status(statusCode).json({
             type: 'error',
-            error: { type: 'api_error', message: result.error || 'Unknown error' }
+            error: { type: errorType, message: result.error || 'Unknown error' }
           })
         }
       }
     }
   } catch (error) {
-    logger.error('Request failed', { error: (error as Error).message })
-    res.status(500).json({
+    const statusCode = getHttpStatusFromError(error as Error)
+    const errorType = getClaudeErrorType(statusCode)
+    logger.error('Request failed', { error: (error as Error).message, statusCode })
+    res.status(statusCode).json({
       type: 'error',
-      error: { type: 'api_error', message: (error as Error).message }
+      error: { type: errorType, message: (error as Error).message }
     })
   }
 })

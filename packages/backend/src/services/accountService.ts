@@ -239,7 +239,18 @@ export async function testAccountConnection(id: string): Promise<{
 
   try {
     // 先获取可用模型列表
-    const models = await fetchKiroModels(account)
+    const { models, error: modelError } = await fetchKiroModels(account)
+    if (modelError) {
+      // 网络或 HTTP 错误，标记账号为 error_suspended
+      await accountStore.updateAccount(id, { status: 'error_suspended', statusReason: `模型列表获取失败: ${modelError}` })
+      notify({
+        type: 'account_error',
+        timestamp: new Date().toISOString(),
+        account: { id, alias: account.alias, email: account.email },
+        detail: { status: 'error_suspended', reason: 'ListAvailableModels failed', error: modelError }
+      }).catch(() => {})
+      return { success: false, error: modelError }
+    }
     if (models.length === 0) {
       return { success: false, error: 'No available models' }
     }
@@ -342,6 +353,22 @@ export async function checkAndRefreshExpiredTokens(): Promise<{
           expiresAt: result.expiresAt
         })
         logger.info('Token auto-refreshed', { id: account.id })
+
+        // 验证刷新后的账号可用性
+        const refreshedAccount = { ...account, accessToken: result.accessToken }
+        const { error: modelError } = await fetchKiroModels(refreshedAccount)
+        if (modelError) {
+          logger.error('Post-refresh model verification failed', { id: account.id, error: modelError })
+          await accountStore.updateAccount(account.id, { status: 'error_suspended', statusReason: `Token 刷新后验证失败: ${modelError}` })
+          notify({
+            type: 'account_error',
+            timestamp: new Date().toISOString(),
+            account: { id: account.id, alias: account.alias, email: account.email },
+            detail: { status: 'error_suspended', reason: 'ListAvailableModels failed after token refresh', error: modelError }
+          }).catch(() => {})
+          return false
+        }
+
         return true
       } else {
         logger.error('Token auto-refresh failed', { id: account.id, error: result.error })
@@ -395,7 +422,7 @@ export async function selectAvailableAccount(): Promise<ProxyAccount | null> {
     }
 
     // 刷新失败，标记为异常挂起
-    await accountStore.updateAccount(selected.id, { status: 'error_suspended' })
+    await accountStore.updateAccount(selected.id, { status: 'error_suspended', statusReason: 'Token 刷新失败' })
     logger.error('Account marked unavailable due to token refresh failure', { id: selected.id })
     notify({
       type: 'account_error',
@@ -501,7 +528,7 @@ export async function getAllAccountsUsage(): Promise<AccountUsage[]> {
       // 检测账号被封禁（TEMPORARILY_SUSPENDED），自动标记为 suspended
       if (errorMsg.includes('TEMPORARILY_SUSPENDED') || errorMsg.includes('temporarily is suspended')) {
         if (account.status !== 'suspended') {
-          await accountStore.updateAccount(account.id, { status: 'suspended' })
+          await accountStore.updateAccount(account.id, { status: 'suspended', statusReason: '账号被封禁 (TEMPORARILY_SUSPENDED)' })
           logger.warn('Account marked as suspended (banned by Kiro)', { id: account.id })
           notify({
             type: 'account_error',
@@ -539,7 +566,7 @@ export async function pauseAccount(id: string): Promise<ProxyAccount | null> {
   const account = await accountStore.getAccountById(id)
   if (!account) return null
 
-  const updated = await accountStore.updateAccount(id, { status: 'paused' })
+  const updated = await accountStore.updateAccount(id, { status: 'paused', statusReason: '手动暂停' })
   if (updated) {
     logger.info('Account paused', { id })
     notify({
@@ -572,7 +599,7 @@ export async function resumeAccount(id: string): Promise<ProxyAccount | null> {
 export async function batchPauseAccounts(accountIds: string[]): Promise<number> {
   let updated = 0
   for (const id of accountIds) {
-    const result = await accountStore.updateAccount(id, { status: 'paused' })
+    const result = await accountStore.updateAccount(id, { status: 'paused', statusReason: '批量暂停' })
     if (result) {
       updated++
       notify({

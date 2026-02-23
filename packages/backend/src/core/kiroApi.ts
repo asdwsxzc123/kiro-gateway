@@ -1047,10 +1047,9 @@ export async function callKiroApi(
  * 获取 Kiro 官方模型列表
  */
 export async function fetchKiroModels(account: ProxyAccount): Promise<{
-  modelId: string
-  modelName: string
-  description: string
-}[]> {
+  models: { modelId: string; modelName: string; description: string }[]
+  error?: string
+}> {
   const region = account.region || 'us-east-1'
   const url = `https://codewhisperer.${region}.amazonaws.com/ListAvailableModels?origin=AI_EDITOR&maxResults=50`
   const machineId = account.machineId
@@ -1070,15 +1069,17 @@ export async function fetchKiroModels(account: ProxyAccount): Promise<{
     const response = await fetch(url, { method: 'GET', headers })
 
     if (!response.ok) {
-      logger.error('ListAvailableModels failed', { status: response.status })
-      return []
+      const errorMsg = `ListAvailableModels failed with status ${response.status}`
+      logger.error(errorMsg)
+      return { models: [], error: errorMsg }
     }
 
     const data = await response.json() as { models?: { modelId: string; modelName: string; description: string }[] }
-    return data.models || []
+    return { models: data.models || [] }
   } catch (error) {
-    logger.error('ListAvailableModels error', { error: (error as Error).message })
-    return []
+    const errorMsg = `ListAvailableModels network error: ${(error as Error).message}`
+    logger.error(errorMsg)
+    return { models: [], error: errorMsg }
   }
 }
 

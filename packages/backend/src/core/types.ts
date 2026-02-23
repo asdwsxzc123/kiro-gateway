@@ -199,6 +199,8 @@ export interface ProxyAccount {
   status?: AccountStatus  // 调度状态，默认 active
   cooldownUntil?: number
   createdAt?: number
+  statusChangedAt?: number
+  statusReason?: string
 }
 
 // 添加账号请求（机器码可选，不提供则自动生成）
@@ -232,6 +234,8 @@ export interface UpdateAccountRequest {
   machineId?: string
   status?: AccountStatus
   expiresAt?: number
+  statusChangedAt?: number
+  statusReason?: string
 }
 
 // ============ 代理服务配置 ============
