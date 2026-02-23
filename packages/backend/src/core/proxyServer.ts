@@ -424,6 +424,24 @@ export class ProxyServer {
     return Array.from(this.inflightRequests.values())
   }
 
+  /**
+   * 获取并发状态概览（队列 + 每账号并发数）
+   */
+  getConcurrencyStatus(): {
+    queue: { active: number; queued: number; maxConcurrent: number }
+    accounts: Array<{ accountId: string; concurrency: number }>
+  } {
+    const concurrencyMap = this.accountPool.getAllConcurrency()
+    const accounts = Array.from(concurrencyMap.entries()).map(([accountId, concurrency]) => ({
+      accountId,
+      concurrency
+    }))
+    return {
+      queue: this.requestQueue.getStatus(),
+      accounts
+    }
+  }
+
   resetStats(): void {
     this.stats = this.initStats()
     this.accountPool.resetAllStats()

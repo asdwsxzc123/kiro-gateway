@@ -9,6 +9,7 @@ import { encrypt, decrypt } from '../utils/crypto.js'
 import { generateMachineId, isValidMachineId, normalizeMachineId } from '../core/machineId.js'
 import type { ProxyAccount, AddAccountRequest, UpdateAccountRequest } from '../core/types.js'
 import { v4 as uuidv4 } from 'uuid'
+import { addSystemLog } from './logStore.js'
 
 const logger = createLogger('AccountStore')
 
@@ -53,7 +54,7 @@ function deserializeAccount(data: Record<string, string>): ProxyAccount {
   for (const [key, value] of Object.entries(data)) {
     if (SENSITIVE_FIELDS.includes(key)) {
       (account as Record<string, unknown>)[key] = decrypt(value)
-    } else if (['expiresAt', 'lastUsed', 'requestCount', 'errorCount', 'cooldownUntil', 'createdAt', 'machineIdCreatedAt', 'statusChangedAt'].includes(key)) {
+    } else if (['expiresAt', 'lastUsed', 'requestCount', 'errorCount', 'cooldownUntil', 'createdAt', 'machineIdCreatedAt', 'statusChangedAt', 'maxConcurrency'].includes(key)) {
       (account as Record<string, unknown>)[key] = parseInt(value, 10)
     } else {
       (account as Record<string, unknown>)[key] = value
@@ -210,12 +211,28 @@ export async function updateAccount(id: string, updates: UpdateAccountRequest): 
       await redis.sadd(MACHINE_IDS, updates.machineId)
     }
 
-    // 状态变更时自动记录时间戳；恢复 active 时清除原因
+    // 状态变更时自动记录时间戳；恢复 active 时清除原因；写入系统日志
     if (updates.status !== undefined && updates.status !== existing.status) {
       updates.statusChangedAt = Date.now()
       if (updates.status === 'active') {
         updates.statusReason = ''
       }
+      // 异步写入系统日志，不阻塞主流程
+      const statusLabel: Record<string, string> = { active: '正常', paused: '已暂停', error_suspended: '异常挂起', suspended: '已封号' }
+      addSystemLog({
+        timestamp: Date.now(),
+        level: updates.status === 'active' ? 'info' : 'warn',
+        category: 'account_status',
+        message: `账号 ${existing.alias || existing.email || id} 状态变更: ${statusLabel[existing.status || 'active'] || existing.status} → ${statusLabel[updates.status] || updates.status}`,
+        data: {
+          accountId: id,
+          alias: existing.alias,
+          email: existing.email,
+          fromStatus: existing.status || 'active',
+          toStatus: updates.status,
+          reason: updates.statusReason || undefined
+        }
+      }).catch(() => {})
     }
 
     const updated: ProxyAccount = { ...existing, ...updates }

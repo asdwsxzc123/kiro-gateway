@@ -125,6 +125,14 @@ export function getInflightRequests(): import('../core/proxyServer.js').Inflight
 }
 
 /**
+ * 获取并发状态概览（队列 + 每账号并发数）
+ */
+export function getConcurrencyStatus() {
+  if (!proxyServer) return { queue: { active: 0, queued: 0, maxConcurrent: 0 }, accounts: [] }
+  return proxyServer.getConcurrencyStatus()
+}
+
+/**
  * 热更新 ProxyServer 配置（配置修改后立即生效，无需重启）
  */
 export async function updateProxyServerConfig(): Promise<void> {

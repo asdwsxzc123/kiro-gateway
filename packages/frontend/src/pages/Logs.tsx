@@ -1,6 +1,6 @@
 import { useState, useMemo } from "react"
 import { useQuery } from "@tanstack/react-query"
-import { Search, Filter, Loader2, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, Calendar, X, Download, FileText } from "lucide-react"
+import { Search, Filter, Loader2, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, Calendar, X, Download, FileText, Activity } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import {
@@ -25,8 +25,22 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
-import { getRequestLogs, getLogFiles, downloadLogFile } from "@/api/logs"
+import { getRequestLogs, getSystemLogs, getLogFiles, downloadLogFile } from "@/api/logs"
 import type { LogsQuery } from "@kiro-gateway/shared"
+
+// 系统日志分类选项
+const SYSTEM_LOG_CATEGORIES = [
+  { value: "all", label: "全部分类" },
+  { value: "account_status", label: "账号状态变更" },
+]
+
+// 系统日志级别选项
+const SYSTEM_LOG_LEVELS = [
+  { value: "all", label: "全部级别" },
+  { value: "info", label: "Info" },
+  { value: "warn", label: "Warn" },
+  { value: "error", label: "Error" },
+]
 
 // 每页显示数量选项
 const PAGE_SIZE_OPTIONS = [10, 20, 50, 100]
@@ -105,8 +119,13 @@ export function Logs() {
   const [customEndDate, setCustomEndDate] = useState<string>("")
 
   // Tab 状态
-  const [activeTab, setActiveTab] = useState<'requests' | 'files'>('requests')
+  const [activeTab, setActiveTab] = useState<'requests' | 'system' | 'files'>('requests')
   const [fileTypeFilter, setFileTypeFilter] = useState<string>('all')
+
+  // 系统日志筛选
+  const [sysLogCategory, setSysLogCategory] = useState<string>("all")
+  const [sysLogLevel, setSysLogLevel] = useState<string>("all")
+  const [sysLogLimit, setSysLogLimit] = useState(100)
 
   // 计算时间范围
   const dateRange = useMemo(() => {
@@ -133,6 +152,19 @@ export function Logs() {
   const { data: logsResponse, isLoading, isFetching, refetch } = useQuery({
     queryKey: ["logs", query],
     queryFn: () => getRequestLogs(query),
+  })
+
+  // 系统日志查询
+  const sysLogParams = useMemo(() => ({
+    limit: sysLogLimit,
+    level: sysLogLevel !== 'all' ? sysLogLevel as 'info' | 'warn' | 'error' : undefined,
+    category: sysLogCategory !== 'all' ? sysLogCategory : undefined,
+  }), [sysLogLimit, sysLogLevel, sysLogCategory])
+
+  const { data: systemLogs = [], isLoading: isSysLoading, isFetching: isSysFetching, refetch: refetchSysLogs } = useQuery({
+    queryKey: ['systemLogs', sysLogParams],
+    queryFn: () => getSystemLogs(sysLogParams),
+    enabled: activeTab === 'system'
   })
 
   // 日志文件查询
@@ -240,6 +272,13 @@ export function Logs() {
         >
           <Search className="mr-2 h-4 w-4" />
           请求日志
+        </Button>
+        <Button
+          variant={activeTab === 'system' ? 'default' : 'outline'}
+          onClick={() => setActiveTab('system')}
+        >
+          <Activity className="mr-2 h-4 w-4" />
+          系统日志
         </Button>
         <Button
           variant={activeTab === 'files' ? 'default' : 'outline'}
@@ -522,6 +561,125 @@ export function Logs() {
         </CardContent>
       </Card>
       </>)}
+
+      {activeTab === 'system' && (
+        <>
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Filter className="h-4 w-4" />
+              筛选条件
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="flex flex-wrap gap-4 items-end">
+              <div className="w-40">
+                <label className="text-sm text-muted-foreground mb-1 block">分类</label>
+                <Select value={sysLogCategory} onValueChange={setSysLogCategory}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="分类" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {SYSTEM_LOG_CATEGORIES.map((opt) => (
+                      <SelectItem key={opt.value} value={opt.value}>{opt.label}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="w-32">
+                <label className="text-sm text-muted-foreground mb-1 block">级别</label>
+                <Select value={sysLogLevel} onValueChange={setSysLogLevel}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="级别" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {SYSTEM_LOG_LEVELS.map((opt) => (
+                      <SelectItem key={opt.value} value={opt.value}>{opt.label}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="w-28">
+                <label className="text-sm text-muted-foreground mb-1 block">条数</label>
+                <Select value={String(sysLogLimit)} onValueChange={(v) => setSysLogLimit(parseInt(v, 10))}>
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {[50, 100, 200, 500].map((n) => (
+                      <SelectItem key={n} value={String(n)}>{n} 条</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <Button
+                variant="outline"
+                onClick={() => refetchSysLogs()}
+                disabled={isSysFetching}
+              >
+                {isSysFetching ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Search className="mr-2 h-4 w-4" />}
+                {isSysFetching ? "刷新中..." : "刷新"}
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle>系统日志</CardTitle>
+            <CardDescription>共 {systemLogs.length} 条记录</CardDescription>
+          </CardHeader>
+          <CardContent>
+            {isSysLoading ? (
+              <div className="py-8 text-center">加载中...</div>
+            ) : systemLogs.length === 0 ? (
+              <div className="py-8 text-center text-muted-foreground">暂无系统日志</div>
+            ) : (
+              <div className="overflow-x-auto">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead className="w-[170px]">时间</TableHead>
+                      <TableHead className="w-[70px]">级别</TableHead>
+                      <TableHead className="w-[130px]">分类</TableHead>
+                      <TableHead>消息</TableHead>
+                      <TableHead className="w-[300px]">详情</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {systemLogs.map((log) => (
+                      <TableRow key={log.id || log.timestamp}>
+                        <TableCell className="whitespace-nowrap text-sm">{new Date(log.timestamp).toLocaleString("zh-CN")}</TableCell>
+                        <TableCell>
+                          <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${
+                            log.level === 'error' ? 'bg-red-100 text-red-700'
+                              : log.level === 'warn' ? 'bg-yellow-100 text-yellow-700'
+                              : 'bg-blue-100 text-blue-700'
+                          }`}>
+                            {log.level}
+                          </span>
+                        </TableCell>
+                        <TableCell>
+                          <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${
+                            log.category === 'account_status' ? 'bg-purple-100 text-purple-700' : 'bg-gray-100 text-gray-600'
+                          }`}>
+                            {log.category === 'account_status' ? '账号状态' : log.category}
+                          </span>
+                        </TableCell>
+                        <TableCell className="text-sm">{log.message}</TableCell>
+                        <TableCell className="text-xs text-muted-foreground max-w-[300px] truncate" title={log.data ? JSON.stringify(log.data) : ''}>
+                          {log.data ? JSON.stringify(log.data) : '-'}
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+        </>
+      )}
 
       {activeTab === 'files' && (
         <Card>

@@ -192,6 +192,9 @@ export interface ProxyAccount {
   machineId: string              // 账号绑定的机器码（必填）
   machineIdCreatedAt?: number    // 机器码创建时间
 
+  // 并发限制
+  maxConcurrency?: number          // 单账号最大并发数，0 或不设置表示不限制
+
   // 运行时状态
   lastUsed?: number
   requestCount?: number
@@ -216,6 +219,7 @@ export interface AddAccountRequest {
   provider?: string
   profileArn?: string
   machineId?: string  // 可选，不提供则自动生成
+  maxConcurrency?: number
 }
 
 // 更新账号请求
@@ -236,6 +240,7 @@ export interface UpdateAccountRequest {
   expiresAt?: number
   statusChangedAt?: number
   statusReason?: string
+  maxConcurrency?: number
 }
 
 // ============ 代理服务配置 ============

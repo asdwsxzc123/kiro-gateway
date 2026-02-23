@@ -316,8 +316,16 @@ export async function testAccountConnection(id: string): Promise<{
       model: selectedModel.modelName || selectedModel.modelId
     }
   } catch (error) {
-    logger.error('Connection test failed', { id, error: (error as Error).message })
-    return { success: false, error: (error as Error).message }
+    const errorMsg = (error as Error).message
+    logger.error('Connection test failed', { id, error: errorMsg })
+    await accountStore.updateAccount(id, { status: 'error_suspended', statusReason: `测试失败: ${errorMsg}` })
+    notify({
+      type: 'account_error',
+      timestamp: new Date().toISOString(),
+      account: { id, alias: account.alias, email: account.email },
+      detail: { status: 'error_suspended', reason: 'Connection test failed', error: errorMsg }
+    }).catch(() => {})
+    return { success: false, error: errorMsg }
   }
 }
 

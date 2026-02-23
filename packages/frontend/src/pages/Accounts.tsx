@@ -50,7 +50,7 @@ import {
   pauseAccount,
   resumeAccount,
 } from "@/api/accounts"
-import { getAllAccountsTodayCost } from "@/api/stats"
+import { getAllAccountsTodayCost, getConcurrencyStatus } from "@/api/stats"
 import type { AddAccountRequest, Account, AccountUsage, AccountStatus } from "@kiro-gateway/shared"
 import type { AccountCostData } from "@/api/stats"
 
@@ -126,6 +126,7 @@ interface EditFormData {
   profileArn: string
   machineId: string
   status: AccountStatus
+  maxConcurrency: number
 }
 
 // 初始编辑表单数据
@@ -143,6 +144,7 @@ const initialEditForm: EditFormData = {
   profileArn: "",
   machineId: "",
   status: 'active',
+  maxConcurrency: 0,
 }
 
 /**
@@ -197,6 +199,13 @@ export function Accounts() {
     refetchInterval: 30 * 1000, // 30秒自动刷新
   })
 
+  // 获取并发状态（3秒轮询）
+  const { data: concurrencyData } = useQuery({
+    queryKey: ["concurrencyStatus"],
+    queryFn: getConcurrencyStatus,
+    refetchInterval: 3 * 1000,
+  })
+
   // 根据账号 ID 获取使用量数据
   const getUsageForAccount = (accountId: string): AccountUsage | undefined => {
     return usageData?.find(u => u.accountId === accountId)
@@ -210,6 +219,11 @@ export function Accounts() {
   // 获取账号的费用数据
   const getAccountCostData = (accountId: string): AccountCostData | undefined => {
     return accountsCostData.find(item => item.accountId === accountId)
+  }
+
+  // 获取账号的实时并发数
+  const getAccountConcurrency = (accountId: string): number => {
+    return concurrencyData?.accounts.find(a => a.accountId === accountId)?.concurrency ?? 0
   }
 
   // 合并账号和费用数据，并排序
@@ -642,6 +656,7 @@ export function Accounts() {
         profileArn: fullAccount.profileArn || "",
         machineId: fullAccount.machineId || "",
         status: fullAccount.status ?? 'active',
+        maxConcurrency: fullAccount.maxConcurrency ?? 0,
       })
 
       setIsEditDialogOpen(true)
@@ -674,6 +689,7 @@ export function Accounts() {
       refreshToken: editForm.refreshToken || undefined,
       clientId: editForm.clientId || undefined,
       clientSecret: editForm.clientSecret || undefined,
+      maxConcurrency: editForm.maxConcurrency || undefined,
     }
 
     updateMutation.mutate({ id: editingAccount.id, data: updateData })
@@ -1290,6 +1306,24 @@ export function Accounts() {
               />
             </div>
 
+            {/* 最大并发数 */}
+            <div className="grid gap-2">
+              <Label htmlFor="edit-maxConcurrency">最大并发数</Label>
+              <Input
+                id="edit-maxConcurrency"
+                type="number"
+                min={0}
+                placeholder="0 表示不限制"
+                value={editForm.maxConcurrency}
+                onChange={(e) =>
+                  setEditForm({ ...editForm, maxConcurrency: parseInt(e.target.value) || 0 })
+                }
+              />
+              <p className="text-xs text-muted-foreground">
+                单账号最大并发请求数，0 表示不限制
+              </p>
+            </div>
+
             {/* 分隔线 */}
             <div className="border-t pt-4 mt-2">
               <p className="text-sm text-muted-foreground mb-4">
@@ -1419,6 +1453,7 @@ export function Accounts() {
                   <TableHead>机器码</TableHead>
                   <TableHead>订阅类型</TableHead>
                   <TableHead>状态</TableHead>
+                  <TableHead>连接数</TableHead>
                   <TableHead>使用量</TableHead>
                   <TableHead>重置时间</TableHead>
                   <TableHead
@@ -1474,6 +1509,18 @@ export function Accounts() {
                           {account.statusReason && <span className="ml-1">{account.statusReason}</span>}
                         </div>
                       )}
+                    </TableCell>
+                    <TableCell>
+                      {(() => {
+                        const current = getAccountConcurrency(account.id)
+                        const max = account.maxConcurrency
+                        if (max && max > 0) {
+                          const ratio = current / max
+                          const colorClass = ratio >= 1 ? "text-red-600 font-semibold" : ratio >= 0.7 ? "text-yellow-600" : "text-green-600"
+                          return <span className={`text-sm ${colorClass}`}>{current}/{max}</span>
+                        }
+                        return <span className={`text-sm ${current > 0 ? "text-blue-600" : "text-muted-foreground"}`}>{current}</span>
+                      })()}
                     </TableCell>
                     <TableCell>
                       <span className="text-sm">{formatUsage(account.id)}</span>

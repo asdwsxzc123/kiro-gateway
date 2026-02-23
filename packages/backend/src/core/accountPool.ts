@@ -136,6 +136,10 @@ export class AccountPool {
       if (stats.needsRefresh) continue
 
       const concurrency = this.activeConcurrency.get(id) || 0
+
+      // 检查单账号并发上限
+      if (account.maxConcurrency && account.maxConcurrency > 0 && concurrency >= account.maxConcurrency) continue
+
       const lastUsed = stats.lastUsed || 0
 
       // 优先选并发数低的，并发相同则选 LRU
@@ -172,6 +176,10 @@ export class AccountPool {
       if (stats.needsRefresh) continue
 
       const concurrency = this.activeConcurrency.get(id) || 0
+
+      // 检查单账号并发上限
+      if (account.maxConcurrency && account.maxConcurrency > 0 && concurrency >= account.maxConcurrency) continue
+
       const lastUsed = stats.lastUsed || 0
 
       if (concurrency < bestConcurrency || (concurrency === bestConcurrency && lastUsed < bestLastUsed)) {
@@ -395,6 +403,10 @@ export class AccountPool {
       if (account.cooldownUntil && account.cooldownUntil > now) continue
 
       const concurrency = this.activeConcurrency.get(id) || 0
+
+      // 检查单账号并发上限
+      if (account.maxConcurrency && account.maxConcurrency > 0 && concurrency >= account.maxConcurrency) continue
+
       const lastUsed = stats.lastUsed || 0
 
       if (concurrency < bestConcurrency || (concurrency === bestConcurrency && lastUsed < bestLastUsed)) {
@@ -450,6 +462,13 @@ export class AccountPool {
    */
   getConcurrency(id: string): number {
     return this.activeConcurrency.get(id) || 0
+  }
+
+  /**
+   * 获取所有账号的并发数映射
+   */
+  getAllConcurrency(): Map<string, number> {
+    return new Map(this.activeConcurrency)
   }
 
   /**

@@ -81,6 +81,7 @@ export interface Account {
   expiresAt?: number;
   machineId: string;
   machineIdCreatedAt?: number;
+  maxConcurrency?: number;
   lastUsed?: number;
   requestCount?: number;
   errorCount?: number;
@@ -103,6 +104,7 @@ export interface AddAccountRequest {
   provider?: string;
   profileArn?: string;
   machineId?: string;
+  maxConcurrency?: number;
 }
 
 export interface AddAccountResponse {
