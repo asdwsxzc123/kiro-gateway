@@ -204,7 +204,7 @@ export function Accounts() {
 
   // 格式化费用显示
   const formatCost = (cost: number): string => {
-    return `$${cost.toFixed(4)}`
+    return `$${cost.toFixed(3)}`
   }
 
   // 获取账号的费用数据
@@ -1408,6 +1408,7 @@ export function Accounts() {
             <Table>
               <TableHeader>
                 <TableRow>
+                  <TableHead>别名</TableHead>
                   <TableHead
                     className="cursor-pointer hover:bg-muted"
                     onClick={() => toggleSort("email")}
@@ -1431,19 +1432,18 @@ export function Accounts() {
                   >
                     累计费用 <SortIndicator field="totalCost" />
                   </TableHead>
+                  <TableHead>创建时间</TableHead>
                   <TableHead className="text-right">操作</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {mergedAccounts?.map((account) => (
                   <TableRow key={account.id}>
+                    <TableCell>
+                      <span className="text-sm">{account.alias || "-"}</span>
+                    </TableCell>
                     <TableCell className="font-medium">
-                      <div>
-                        {account.alias || account.email || account.id.slice(0, 12) + "..."}
-                        {account.alias && account.email && (
-                          <div className="text-xs text-muted-foreground font-normal">{account.email}</div>
-                        )}
-                      </div>
+                      {account.email || account.id.slice(0, 12) + "..."}
                     </TableCell>
                     <TableCell>
                       <span className="text-xs font-mono text-muted-foreground" title={account.machineId || ""}>
@@ -1479,6 +1479,11 @@ export function Accounts() {
                     </TableCell>
                     <TableCell className="font-semibold text-orange-600">
                       {account.costData ? formatCost(account.costData.totalCost) : "-"}
+                    </TableCell>
+                    <TableCell>
+                      <span className="text-sm text-muted-foreground">
+                        {account.createdAt ? new Date(account.createdAt).toLocaleDateString("zh-CN") : "-"}
+                      </span>
                     </TableCell>
                     <TableCell className="text-right">
                       <div className="flex justify-end gap-2">

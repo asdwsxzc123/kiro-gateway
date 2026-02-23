@@ -4,4 +4,4 @@
 
 
 ## 下载
-wget -O install.sh "https://raw.githubusercontent.com/asdwsxzc123/kiro-gateway/master/install.sh?token=GHSAT0AAAAAADGA53ZORVQUVGWSQP6XAP562M3CAEA"
+wget -O install.sh https://raw.githubusercontent.com/asdwsxzc123/kiro-gateway/master/install.sh?token=GHSAT0AAAAAADGA53ZORVQUVGWSQP6XAP562M3CAEA
