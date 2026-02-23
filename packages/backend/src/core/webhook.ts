@@ -34,6 +34,7 @@ export async function notify(notification: WebhookNotification): Promise<void> {
   if (notification.type === 'account_error' && !config.notifyOnAccountError) return
   if (notification.type === 'usage_alert' && !config.usageThreshold) return
   if (notification.type === 'token_refresh_fail' && !config.notifyOnTokenRefreshFail) return
+  if (notification.type === 'heartbeat' && !config.notifyHeartbeat) return
 
   const platforms = config.platforms.filter(p => p.enabled && p.url)
   if (platforms.length === 0) return
@@ -163,6 +164,8 @@ function buildTitle(n: WebhookNotification): string {
     account_error: '账号异常',
     usage_alert: '用量告警',
     token_refresh_fail: 'Token 刷新失败',
+    heartbeat: '心跳报告',
+    request_stuck: '请求卡死告警',
     test: '测试通知',
   }
   return `Kiro Gateway · ${map[n.type] || n.type}`
@@ -184,6 +187,13 @@ function buildMarkdown(n: WebhookNotification): string {
     if (d.reason) lines.push(`**原因**: ${d.reason}`)
   } else if (n.type === 'token_refresh_fail') {
     if (d.error) lines.push(`**错误**: ${d.error}`)
+  } else if (n.type === 'heartbeat') {
+    lines.push(`**运行时间**: ${d.uptime}`)
+    lines.push(`**活跃请求**: ${d.inflightCount}`)
+    lines.push(`**可用账号**: ${d.availableAccounts}/${d.totalAccounts}`)
+  } else if (n.type === 'request_stuck') {
+    lines.push(`**卡死请求数**: ${d.stuckCount}`)
+    if (d.details) lines.push(`**详情**: ${d.details}`)
   }
 
   lines.push(`**时间**: ${n.timestamp}`)

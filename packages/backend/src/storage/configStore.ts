@@ -365,6 +365,7 @@ const DEFAULT_WEBHOOK_CONFIG: WebhookConfig = {
   usageThreshold: 0,
   notifyOnAccountError: false,
   notifyOnTokenRefreshFail: false,
+  notifyHeartbeat: false,
   platforms: [],
 }
 
@@ -385,6 +386,7 @@ export async function getWebhookConfig(): Promise<WebhookConfig> {
       usageThreshold: oldData?.webhookUsageThreshold ? parseInt(oldData.webhookUsageThreshold, 10) : 0,
       notifyOnAccountError: oldData?.webhookOnAccountError === 'true',
       notifyOnTokenRefreshFail: false,
+      notifyHeartbeat: false,
       platforms: oldData?.webhookUrl
         ? [{ platform: 'feishu', enabled: true, url: oldData.webhookUrl, label: 'Default' }]
         : [],

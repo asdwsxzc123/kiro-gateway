@@ -1,6 +1,6 @@
 /**
  * Webhook 服务
- * 检查账号使用量并发送告警通知
+ * 检查账号使用量并发送告警通知，健康心跳与死锁检测
  */
 
 import * as accountStore from '../storage/accountStore.js'
@@ -10,7 +10,7 @@ import { notify } from '../core/webhook.js'
 import type { ProxyAccount } from '../core/types.js'
 import { getRedisClient } from '../storage/redis.js'
 import { createLogger } from '../utils/logger.js'
-import { refreshProxyServerAccounts } from '../routes/proxy.js'
+import { refreshProxyServerAccounts, getInflightRequests } from '../routes/proxy.js'
 
 const logger = createLogger('WebhookService')
 
@@ -92,4 +92,74 @@ export async function checkUsageAndAlert(): Promise<void> {
   if (needsRefresh) {
     await refreshProxyServerAccounts()
   }
+}
+
+/** 请求卡死阈值：5 分钟 */
+const STUCK_THRESHOLD_MS = 5 * 60 * 1000
+
+/**
+ * 格式化运行时间为可读字符串
+ */
+function formatUptime(seconds: number): string {
+  const d = Math.floor(seconds / 86400)
+  const h = Math.floor((seconds % 86400) / 3600)
+  const m = Math.floor((seconds % 3600) / 60)
+  const parts: string[] = []
+  if (d > 0) parts.push(`${d}d`)
+  if (h > 0) parts.push(`${h}h`)
+  parts.push(`${m}m`)
+  return parts.join(' ')
+}
+
+/**
+ * 健康心跳 + 请求死锁检测
+ * 1. 检查是否有请求卡死超过阈值时间 → 推送 request_stuck 告警
+ * 2. 推送心跳通知，表明服务存活
+ */
+export async function checkHealthAndNotify(): Promise<void> {
+  const now = Date.now()
+  const inflight = getInflightRequests()
+
+  // 死锁检测：找出超过阈值的请求
+  const stuckRequests = inflight.filter(r => (now - r.startTime) >= STUCK_THRESHOLD_MS)
+
+  if (stuckRequests.length > 0) {
+    const details = stuckRequests.map(r => {
+      const durationMin = Math.round((now - r.startTime) / 60000)
+      return `${r.model} (${durationMin}min)`
+    }).join(', ')
+
+    logger.warn('Stuck requests detected', {
+      count: stuckRequests.length,
+      details,
+    })
+
+    notify({
+      type: 'request_stuck',
+      timestamp: new Date().toISOString(),
+      detail: {
+        stuckCount: stuckRequests.length,
+        inflightCount: inflight.length,
+        details,
+      },
+    }).catch(() => {})
+  }
+
+  // 心跳通知
+  const accounts: ProxyAccount[] = await accountStore.getAllAccounts()
+  const activeAccounts = accounts.filter(
+    a => a.status === 'active' || a.status === undefined
+  )
+
+  notify({
+    type: 'heartbeat',
+    timestamp: new Date().toISOString(),
+    detail: {
+      uptime: formatUptime(Math.floor(process.uptime())),
+      inflightCount: inflight.length,
+      stuckCount: stuckRequests.length,
+      totalAccounts: accounts.length,
+      availableAccounts: activeAccounts.length,
+    },
+  }).catch(() => {})
 }

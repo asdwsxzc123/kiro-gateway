@@ -500,7 +500,8 @@ export type WebhookPlatformType =
   | 'slack' | 'discord' | 'custom'
 
 export type WebhookNotificationType =
-  | 'account_error' | 'usage_alert' | 'token_refresh_fail' | 'test'
+  | 'account_error' | 'usage_alert' | 'token_refresh_fail'
+  | 'heartbeat' | 'request_stuck' | 'test'
 
 export interface WebhookPlatformConfig {
   platform: WebhookPlatformType;
@@ -515,6 +516,7 @@ export interface WebhookConfig {
   usageThreshold: number;
   notifyOnAccountError: boolean;
   notifyOnTokenRefreshFail: boolean;
+  notifyHeartbeat: boolean;
   platforms: WebhookPlatformConfig[];
 }
 

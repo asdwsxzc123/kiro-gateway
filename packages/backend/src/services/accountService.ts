@@ -562,12 +562,6 @@ export async function resumeAccount(id: string): Promise<ProxyAccount | null> {
   const updated = await accountStore.updateAccount(id, { status: 'active' })
   if (updated) {
     logger.info('Account resumed', { id })
-    notify({
-      type: 'account_error',
-      timestamp: new Date().toISOString(),
-      account: { id, alias: account.alias, email: account.email },
-      detail: { status: 'active', reason: 'manual' }
-    }).catch(() => {})
   }
   return updated
 }
@@ -602,12 +596,6 @@ export async function batchResumeAccounts(accountIds: string[]): Promise<number>
     const result = await accountStore.updateAccount(id, { status: 'active' })
     if (result) {
       updated++
-      notify({
-        type: 'account_error',
-        timestamp: new Date().toISOString(),
-        account: { id, alias: result.alias, email: result.email },
-        detail: { status: 'active', reason: 'batch' }
-      }).catch(() => {})
     }
   }
   logger.info('Batch resume completed', { requested: accountIds.length, updated })

@@ -76,6 +76,14 @@ export async function refreshProxyServerAccounts(): Promise<void> {
 }
 
 /**
+ * 获取当前所有进行中的请求（用于死锁检测）
+ */
+export function getInflightRequests(): import('../core/proxyServer.js').InflightRequest[] {
+  if (!proxyServer) return []
+  return proxyServer.getInflightRequests()
+}
+
+/**
  * Claude Messages API
  * POST /v1/messages
  */

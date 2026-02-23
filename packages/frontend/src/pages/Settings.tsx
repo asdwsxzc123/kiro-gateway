@@ -1047,7 +1047,7 @@ export function Settings() {
                     </div>
 
                     {/* 通知类型 */}
-                    <div className="grid gap-4 md:grid-cols-3">
+                    <div className="grid gap-4 md:grid-cols-2">
                       <div className="flex items-center justify-between rounded-lg border p-3">
                         <div className="space-y-0.5">
                           <Label className="text-xs">账号异常</Label>
@@ -1064,6 +1064,15 @@ export function Settings() {
                         <Switch
                           checked={webhookConfig.notifyOnTokenRefreshFail}
                           onCheckedChange={(checked) => setWebhookConfig({ ...webhookConfig, notifyOnTokenRefreshFail: checked })}
+                        />
+                      </div>
+                      <div className="flex items-center justify-between rounded-lg border p-3">
+                        <div className="space-y-0.5">
+                          <Label className="text-xs">心跳 & 卡死检测</Label>
+                        </div>
+                        <Switch
+                          checked={webhookConfig.notifyHeartbeat}
+                          onCheckedChange={(checked) => setWebhookConfig({ ...webhookConfig, notifyHeartbeat: checked })}
                         />
                       </div>
                       <div className="space-y-1">

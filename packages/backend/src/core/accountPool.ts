@@ -132,11 +132,7 @@ export class AccountPool {
       }
     }
 
-    if (bestAccount) return bestAccount
-
-    // 没有可用账号，返回第一个（可能需要刷新）
-    const firstId = this.accountOrder[0]
-    return this.accounts.get(firstId) || null
+    return bestAccount
   }
 
   /**
@@ -236,6 +232,8 @@ export class AccountPool {
    */
   recordErrorWithType(id: string, errorCode: string, cooldownMs: number): void {
     const stats = this.accountStats.get(id)
+    const account = this.accounts.get(id)
+
     if (stats) {
       stats.errors++
       if (errorCode === 'QUOTA_EXHAUSTED') {
@@ -243,21 +241,18 @@ export class AccountPool {
       }
 
       // 设置差异化冷却时间
-      const account = this.accounts.get(id)
       if (account && cooldownMs > 0) {
         account.cooldownUntil = Date.now() + cooldownMs
       }
 
       // 连续错误过多，自动挂起
       if (stats.errors >= 3) {
-        const acct = this.accounts.get(id)
-        if (acct && acct.status !== 'paused' && acct.status !== 'suspended') {
+        if (account && account.status !== 'paused' && account.status !== 'suspended') {
           this.setStatus(id, 'error_suspended')
         }
       }
     }
 
-    const account = this.accounts.get(id)
     if (account) {
       account.errorCount = (account.errorCount || 0) + 1
     }
@@ -300,8 +295,8 @@ export class AccountPool {
       }
     }
 
-    // 状态变更时触发 webhook 告警
-    if (account) {
+    // 状态变更时触发 webhook 告警（active 是正常状态，不推送）
+    if (account && status !== 'active') {
       notify({
         type: 'account_error',
         timestamp: new Date().toISOString(),

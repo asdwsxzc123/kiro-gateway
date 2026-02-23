@@ -94,6 +94,12 @@ export interface ProxyServerEvents {
   onStatsUpdate?: (stats: ProxyStats) => void
 }
 
+export interface InflightRequest {
+  id: string
+  startTime: number
+  model: string
+}
+
 export class ProxyServer {
   private config: ProxyConfig
   private accountPool: AccountPool
@@ -102,6 +108,7 @@ export class ProxyServer {
   private refreshingTokens: Set<string> = new Set()
   private apiKeys: Map<string, ApiKey> = new Map()
   private requestQueue: RequestQueue
+  private inflightRequests: Map<string, InflightRequest> = new Map()
 
   constructor(config: Partial<ProxyConfig> = {}, events: ProxyServerEvents = {}) {
     this.config = { ...DEFAULT_CONFIG, ...config }
@@ -404,6 +411,13 @@ export class ProxyServer {
     return { ...this.stats }
   }
 
+  /**
+   * 获取所有正在进行中的请求（用于死锁检测）
+   */
+  getInflightRequests(): InflightRequest[] {
+    return Array.from(this.inflightRequests.values())
+  }
+
   resetStats(): void {
     this.stats = this.initStats()
     this.accountPool.resetAllStats()
@@ -629,8 +643,14 @@ export class ProxyServer {
     signal?: AbortSignal
   ): Promise<{ success: boolean; response?: unknown; error?: string }> {
     let release: (() => void) | undefined
+    const reqId = uuidv4()
     try {
       release = await this.requestQueue.acquire(signal)
+      this.inflightRequests.set(reqId, {
+        id: reqId,
+        startTime: Date.now(),
+        model: request.model || 'unknown',
+      })
       return await this._handleClaudeRequest(request, _headers, boundAccountIds, signal)
     } catch (error) {
       if (!release) {
@@ -639,6 +659,7 @@ export class ProxyServer {
       }
       throw error
     } finally {
+      this.inflightRequests.delete(reqId)
       release?.()
     }
   }
@@ -865,8 +886,14 @@ export class ProxyServer {
     signal?: AbortSignal
   ): Promise<void> {
     let release: (() => void) | undefined
+    const reqId = uuidv4()
     try {
       release = await this.requestQueue.acquire(signal)
+      this.inflightRequests.set(reqId, {
+        id: reqId,
+        startTime: Date.now(),
+        model: request.model || 'unknown',
+      })
       await this._handleClaudeStreamRequest(request, callbacks, headers, matchedApiKey, boundAccountIds, signal)
     } catch (error) {
       if (!release) {
@@ -876,6 +903,7 @@ export class ProxyServer {
       }
       throw error
     } finally {
+      this.inflightRequests.delete(reqId)
       release?.()
     }
   }

@@ -7,7 +7,7 @@ import { getConfig, loadConfig } from './config/index.js'
 import { getRedisClient, closeRedis } from './storage/redis.js'
 import { createLogger } from './utils/logger.js'
 import * as accountService from './services/accountService.js'
-import { checkUsageAndAlert } from './services/webhookService.js'
+import { checkUsageAndAlert, checkHealthAndNotify } from './services/webhookService.js'
 
 const logger = createLogger('Main')
 
@@ -15,6 +15,8 @@ const logger = createLogger('Main')
 let tokenRefreshInterval: NodeJS.Timeout | null = null
 // Webhook 使用量检查定时器
 let usageCheckInterval: NodeJS.Timeout | null = null
+// 健康心跳定时器
+let healthCheckInterval: NodeJS.Timeout | null = null
 
 /**
  * 启动服务器
@@ -59,6 +61,9 @@ async function start(): Promise<void> {
   // 启动 Webhook 使用量检查定时任务
   startUsageCheckTask()
 
+  // 启动健康心跳定时任务
+  startHealthCheckTask()
+
   // 优雅关闭
   const shutdown = async (signal: string) => {
     logger.info(`Received ${signal}, shutting down...`)
@@ -69,6 +74,9 @@ async function start(): Promise<void> {
     }
     if (usageCheckInterval) {
       clearInterval(usageCheckInterval)
+    }
+    if (healthCheckInterval) {
+      clearInterval(healthCheckInterval)
     }
 
     // 关闭 HTTP 服务器
@@ -124,6 +132,24 @@ function startUsageCheckTask(): void {
   }, interval)
 
   logger.info('Usage check task started (interval: 5 minutes)')
+}
+
+/**
+ * 启动健康心跳 + 死锁检测定时任务
+ */
+function startHealthCheckTask(): void {
+  // 每 10 分钟检查一次
+  const interval = 10 * 60 * 1000
+
+  healthCheckInterval = setInterval(async () => {
+    try {
+      await checkHealthAndNotify()
+    } catch (error) {
+      logger.error('Health check task failed', { error: (error as Error).message })
+    }
+  }, interval)
+
+  logger.info('Health check task started (interval: 10 minutes)')
 }
 
 // 启动

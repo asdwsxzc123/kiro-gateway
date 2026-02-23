@@ -847,7 +847,7 @@ async function parseEventStream(
             if (event._type || event.error) {
               const errMsg = event.message || event.error?.message || 'Unknown stream error'
               // Try to detect specific error codes in stream errors
-              if (errMsg.includes('MONTHLY_REQUEST_COUNT') || errMsg.includes('402')) {
+              if (errMsg.includes('MONTHLY_REQUEST_COUNT')) {
                 throw new KiroApiError(errMsg, 402, 'MONTHLY_LIMIT', false)
               }
               if (errMsg.includes('TEMPORARILY_SUSPENDED') || errMsg.includes('temporarily is suspended')) {
