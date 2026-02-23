@@ -14,6 +14,7 @@ import type {
   KiroToolUse,
   ProxyAccount
 } from './types.js'
+import { KiroApiError } from './types.js'
 import { createLogger } from '../utils/logger.js'
 import { countTokens } from './tokenCounter.js'
 
@@ -845,7 +846,17 @@ async function parseEventStream(
             // 处理错误
             if (event._type || event.error) {
               const errMsg = event.message || event.error?.message || 'Unknown stream error'
-              throw new Error(errMsg)
+              // Try to detect specific error codes in stream errors
+              if (errMsg.includes('MONTHLY_REQUEST_COUNT') || errMsg.includes('402')) {
+                throw new KiroApiError(errMsg, 402, 'MONTHLY_LIMIT', false)
+              }
+              if (errMsg.includes('TEMPORARILY_SUSPENDED') || errMsg.includes('temporarily is suspended')) {
+                throw new KiroApiError(errMsg, 0, 'ACCOUNT_SUSPENDED', false)
+              }
+              if (errMsg.includes('overloaded') || errMsg.includes('529')) {
+                throw new KiroApiError(errMsg, 529, 'OVERLOADED', true)
+              }
+              throw new KiroApiError(errMsg, 0, 'UNKNOWN', false)
             }
           } catch (parseError) {
             if (!(parseError instanceof SyntaxError)) {
@@ -941,20 +952,23 @@ export async function callKiroApiStream(
         signal
       })
 
-      if (response.status === 429) {
-        logger.warn(`Endpoint ${endpoint.name} quota exhausted, trying next...`)
-        lastError = new Error(`Quota exhausted on ${endpoint.name}`)
-        continue
-      }
-
-      if (response.status === 401 || response.status === 403) {
-        const body = await response.text()
-        throw new Error(`Auth error ${response.status}: ${body}`)
-      }
-
       if (!response.ok) {
         const body = await response.text()
-        throw new Error(`API error ${response.status}: ${body}`)
+        const kiroError = KiroApiError.fromHttpResponse(response.status, body, endpoint.name)
+
+        // 429: try next endpoint
+        if (response.status === 429) {
+          logger.warn(`Endpoint ${endpoint.name} quota exhausted, trying next...`)
+          lastError = kiroError
+          continue
+        }
+
+        // Auth errors: don't try next endpoint
+        if (kiroError.errorCode === 'AUTH_ERROR') {
+          throw kiroError
+        }
+
+        throw kiroError
       }
       console.log(`[Response] status=${response.status} ok=${response.ok}`)
 

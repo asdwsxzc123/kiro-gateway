@@ -23,8 +23,9 @@ export interface AccountPoolStats {
 export class AccountPool {
   private accounts: Map<string, ProxyAccount> = new Map()
   private accountStats: Map<string, AccountPoolStats> = new Map()
-  private currentIndex: number = 0
   private accountOrder: string[] = []
+  // 每账号活跃请求数追踪（内存级，单实例无需 Redis）
+  private activeConcurrency: Map<string, number> = new Map()
 
   /**
    * 检查账号是否处于 active 状态（可参与调度）
@@ -71,9 +72,6 @@ export class AccountPool {
     if (removed) {
       this.accountStats.delete(id)
       this.accountOrder = this.accountOrder.filter(aid => aid !== id)
-      if (this.currentIndex >= this.accountOrder.length) {
-        this.currentIndex = 0
-      }
     }
     return removed
   }
@@ -103,59 +101,54 @@ export class AccountPool {
   }
 
   /**
-   * 获取下一个可用账号（轮询策略）
+   * 获取下一个可用账号（LRU + 并发感知策略）
+   * 优先选择并发数最低的账号，并发数相同时选择 lastUsed 最早的
    */
   getNextAccount(): ProxyAccount | null {
     if (this.accountOrder.length === 0) return null
 
     const now = Date.now()
-    const startIndex = this.currentIndex
-    let attempts = 0
+    let bestAccount: ProxyAccount | null = null
+    let bestConcurrency = Infinity
+    let bestLastUsed = Infinity
 
-    while (attempts < this.accountOrder.length) {
-      const id = this.accountOrder[this.currentIndex]
+    for (const id of this.accountOrder) {
       const account = this.accounts.get(id)
       const stats = this.accountStats.get(id)
 
-      this.currentIndex = (this.currentIndex + 1) % this.accountOrder.length
+      if (!account || !stats) continue
+      if (!this.isActive(account)) continue
+      if (account.cooldownUntil && account.cooldownUntil > now) continue
+      if (stats.needsRefresh) continue
 
-      if (account && stats) {
-        // 检查调度状态（paused / error_suspended 不参与调度）
-        if (!this.isActive(account)) {
-          attempts++
-          continue
-        }
+      const concurrency = this.activeConcurrency.get(id) || 0
+      const lastUsed = stats.lastUsed || 0
 
-        // 检查冷却时间
-        if (account.cooldownUntil && account.cooldownUntil > now) {
-          attempts++
-          continue
-        }
-
-        // 检查是否需要刷新 Token
-        if (stats.needsRefresh) {
-          attempts++
-          continue
-        }
-
-        return account
+      // 优先选并发数低的，并发相同则选 LRU
+      if (concurrency < bestConcurrency || (concurrency === bestConcurrency && lastUsed < bestLastUsed)) {
+        bestConcurrency = concurrency
+        bestLastUsed = lastUsed
+        bestAccount = account
       }
-
-      attempts++
     }
 
+    if (bestAccount) return bestAccount
+
     // 没有可用账号，返回第一个（可能需要刷新）
-    const firstId = this.accountOrder[startIndex]
+    const firstId = this.accountOrder[0]
     return this.accounts.get(firstId) || null
   }
 
   /**
-   * 获取下一个可用账号（排除指定账号）
+   * 获取下一个可用账号（排除指定账号，LRU + 并发感知策略）
    */
   getNextAvailableAccount(excludeId?: string): ProxyAccount | null {
     if (this.accountOrder.length === 0) return null
 
     const now = Date.now()
+    let bestAccount: ProxyAccount | null = null
+    let bestConcurrency = Infinity
+    let bestLastUsed = Infinity
 
     for (const id of this.accountOrder) {
       if (id === excludeId) continue
@@ -163,16 +156,22 @@ export class AccountPool {
       const account = this.accounts.get(id)
       const stats = this.accountStats.get(id)
 
-      if (account && stats) {
-        if (!this.isActive(account)) continue
-        if (account.cooldownUntil && account.cooldownUntil > now) continue
-        if (stats.needsRefresh) continue
+      if (!account || !stats) continue
+      if (!this.isActive(account)) continue
+      if (account.cooldownUntil && account.cooldownUntil > now) continue
+      if (stats.needsRefresh) continue
 
-        return account
+      const concurrency = this.activeConcurrency.get(id) || 0
+      const lastUsed = stats.lastUsed || 0
+
+      if (concurrency < bestConcurrency || (concurrency === bestConcurrency && lastUsed < bestLastUsed)) {
+        bestConcurrency = concurrency
+        bestLastUsed = lastUsed
+        bestAccount = account
       }
     }
 
-    return null
+    return bestAccount
   }
 
   /**
@@ -221,6 +220,38 @@ export class AccountPool {
         const account = this.accounts.get(id)
         if (account && account.status !== 'paused' && account.status !== 'suspended') {
           // 仅非手动暂停和非封号的账号才自动挂起
+          this.setStatus(id, 'error_suspended')
+        }
+      }
+    }
+
+    const account = this.accounts.get(id)
+    if (account) {
+      account.errorCount = (account.errorCount || 0) + 1
+    }
+  }
+
+  /**
+   * 记录请求错误（按错误类型差异化冷却）
+   */
+  recordErrorWithType(id: string, errorCode: string, cooldownMs: number): void {
+    const stats = this.accountStats.get(id)
+    if (stats) {
+      stats.errors++
+      if (errorCode === 'QUOTA_EXHAUSTED') {
+        stats.quotaErrors++
+      }
+
+      // 设置差异化冷却时间
+      const account = this.accounts.get(id)
+      if (account && cooldownMs > 0) {
+        account.cooldownUntil = Date.now() + cooldownMs
+      }
+
+      // 连续错误过多，自动挂起
+      if (stats.errors >= 3) {
+        const acct = this.accounts.get(id)
+        if (acct && acct.status !== 'paused' && acct.status !== 'suspended') {
           this.setStatus(id, 'error_suspended')
         }
       }
@@ -332,15 +363,17 @@ export class AccountPool {
   }
 
   /**
-   * 从指定的账号子集中轮询选择下一个可用账号
+   * 从指定的账号子集中选择下一个可用账号（LRU + 并发感知策略）
    * 用于 API Key 绑定账号场景：只从绑定的账号中选择
    */
   getNextAccountFromSubset(accountIds: string[]): ProxyAccount | null {
     if (accountIds.length === 0) return null
 
     const now = Date.now()
+    let bestAccount: ProxyAccount | null = null
+    let bestConcurrency = Infinity
+    let bestLastUsed = Infinity
 
-    // 第一轮：找可用的账号
     for (const id of accountIds) {
       const account = this.accounts.get(id)
       const stats = this.accountStats.get(id)
@@ -350,11 +383,17 @@ export class AccountPool {
       if (stats.needsRefresh) continue
       if (account.cooldownUntil && account.cooldownUntil > now) continue
 
-      return account
+      const concurrency = this.activeConcurrency.get(id) || 0
+      const lastUsed = stats.lastUsed || 0
+
+      if (concurrency < bestConcurrency || (concurrency === bestConcurrency && lastUsed < bestLastUsed)) {
+        bestConcurrency = concurrency
+        bestLastUsed = lastUsed
+        bestAccount = account
+      }
     }
 
-    // 没有可用账号，返回 null（不像全局轮询那样 fallback）
-    return null
+    return bestAccount
   }
 
   /**
@@ -377,6 +416,31 @@ export class AccountPool {
     return account
   }
 
+  // ============ 并发追踪 ============
+
+  /**
+   * 增加账号活跃并发数
+   */
+  incrementConcurrency(id: string): void {
+    const current = this.activeConcurrency.get(id) || 0
+    this.activeConcurrency.set(id, current + 1)
+  }
+
+  /**
+   * 减少账号活跃并发数
+   */
+  decrementConcurrency(id: string): void {
+    const current = this.activeConcurrency.get(id) || 0
+    this.activeConcurrency.set(id, Math.max(0, current - 1))
+  }
+
+  /**
+   * 获取账号当前活跃并发数
+   */
+  getConcurrency(id: string): number {
+    return this.activeConcurrency.get(id) || 0
+  }
+
   /**
    * 清空账号池
    */
@@ -384,7 +448,7 @@ export class AccountPool {
     this.accounts.clear()
     this.accountStats.clear()
     this.accountOrder = []
-    this.currentIndex = 0
+    this.activeConcurrency.clear()
   }
 
   /**

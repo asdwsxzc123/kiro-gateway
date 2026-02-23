@@ -252,7 +252,18 @@ export interface ProxyConfig {
   maxConcurrent: number
   maxRetries: number
   retryDelayMs: number
+
+  // 错误冷却时间配置（毫秒）
+  errorCooldown429?: number    // 429 配额耗尽冷却，默认 60s
+  errorCooldown5xx?: number    // 5xx 服务端错误冷却，默认 15s
+  errorCooldown529?: number    // 529 过载冷却，默认 120s
+
   requestTimeout?: number
+
+  // 请求排队配置
+  queueEnabled?: boolean       // 是否启用排队，默认 false
+  queueMaxSize?: number        // 最大队列长度，默认 2x maxConcurrent
+  queueTimeoutMs?: number      // 排队超时时间（毫秒），默认 30s
 
   // Token 刷新配置
   tokenRefreshBeforeExpiry: number  // 提前刷新时间（秒）
@@ -474,4 +485,59 @@ export interface KiroModel {
   name: string
   description?: string
   maxTokens?: number
+}
+
+// ============ 结构化错误类型 ============
+
+export type KiroErrorCode =
+  | 'QUOTA_EXHAUSTED'      // 429
+  | 'SERVER_ERROR'         // 5xx
+  | 'OVERLOADED'           // 529
+  | 'AUTH_ERROR'           // 401/403
+  | 'MONTHLY_LIMIT'        // 402 / MONTHLY_REQUEST_COUNT
+  | 'ACCOUNT_SUSPENDED'    // TEMPORARILY_SUSPENDED
+  | 'UNKNOWN'
+
+export class KiroApiError extends Error {
+  public readonly statusCode: number
+  public readonly errorCode: KiroErrorCode
+  public readonly retryable: boolean
+  public readonly endpoint?: string
+
+  constructor(
+    message: string,
+    statusCode: number,
+    errorCode: KiroErrorCode,
+    retryable: boolean,
+    endpoint?: string
+  ) {
+    super(message)
+    this.name = 'KiroApiError'
+    this.statusCode = statusCode
+    this.errorCode = errorCode
+    this.retryable = retryable
+    this.endpoint = endpoint
+  }
+
+  static fromHttpResponse(status: number, body: string, endpoint?: string): KiroApiError {
+    if (status === 429) {
+      return new KiroApiError(`Quota exhausted: ${body}`, 429, 'QUOTA_EXHAUSTED', true, endpoint)
+    }
+    if (status === 529) {
+      return new KiroApiError(`Service overloaded: ${body}`, 529, 'OVERLOADED', true, endpoint)
+    }
+    if (status === 401 || status === 403) {
+      return new KiroApiError(`Auth error ${status}: ${body}`, status, 'AUTH_ERROR', false, endpoint)
+    }
+    if (status === 402 || body.includes('MONTHLY_REQUEST_COUNT')) {
+      return new KiroApiError(`Monthly limit: ${body}`, status, 'MONTHLY_LIMIT', false, endpoint)
+    }
+    if (body.includes('TEMPORARILY_SUSPENDED') || body.includes('temporarily is suspended')) {
+      return new KiroApiError(`Account suspended: ${body}`, status, 'ACCOUNT_SUSPENDED', false, endpoint)
+    }
+    if (status >= 500) {
+      return new KiroApiError(`Server error ${status}: ${body}`, status, 'SERVER_ERROR', true, endpoint)
+    }
+    return new KiroApiError(`API error ${status}: ${body}`, status, 'UNKNOWN', false, endpoint)
+  }
 }
