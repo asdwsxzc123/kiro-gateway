@@ -41,6 +41,7 @@ interface EditFormData {
   machineId: string
   status: AccountStatus
   maxConcurrency: number
+  proxyUrl: string
 }
 
 // 初始编辑表单数据
@@ -59,6 +60,7 @@ const initialEditForm: EditFormData = {
   machineId: "",
   status: "active",
   maxConcurrency: 0,
+  proxyUrl: "",
 }
 
 interface EditAccountDialogProps {
@@ -96,6 +98,7 @@ export function EditAccountDialog({ open, onOpenChange, account }: EditAccountDi
           machineId: fullAccount.machineId || "",
           status: fullAccount.status ?? "active",
           maxConcurrency: fullAccount.maxConcurrency ?? 0,
+          proxyUrl: fullAccount.proxyUrl || "",
         })
       })
       .catch((error) => {
@@ -144,6 +147,7 @@ export function EditAccountDialog({ open, onOpenChange, account }: EditAccountDi
       clientId: editForm.clientId || undefined,
       clientSecret: editForm.clientSecret || undefined,
       maxConcurrency: editForm.maxConcurrency || undefined,
+      proxyUrl: editForm.proxyUrl,
     }
 
     updateMutation.mutate({ id: account.id, data: updateData })
@@ -294,6 +298,19 @@ export function EditAccountDialog({ open, onOpenChange, account }: EditAccountDi
                 value={editForm.machineId}
                 onChange={(e) =>
                   setEditForm({ ...editForm, machineId: e.target.value })
+                }
+              />
+            </div>
+
+            {/* 代理 IP */}
+            <div className="grid gap-2">
+              <Label htmlFor="edit-proxyUrl">代理 IP</Label>
+              <Input
+                id="edit-proxyUrl"
+                placeholder="http://user:pass@host:port"
+                value={editForm.proxyUrl}
+                onChange={(e) =>
+                  setEditForm({ ...editForm, proxyUrl: e.target.value })
                 }
               />
             </div>

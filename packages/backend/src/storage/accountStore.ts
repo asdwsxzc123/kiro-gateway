@@ -162,6 +162,7 @@ export async function addAccount(request: AddAccountRequest): Promise<ProxyAccou
     authMethod: request.authMethod || 'social',
     provider: request.provider,
     profileArn: request.profileArn,
+    proxyUrl: request.proxyUrl,
     machineId,
     machineIdCreatedAt: now,
     status: 'active',

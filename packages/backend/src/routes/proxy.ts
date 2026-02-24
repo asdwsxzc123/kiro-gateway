@@ -86,6 +86,8 @@ async function getProxyServer(): Promise<ProxyServer> {
       queueEnabled: config.queueEnabled ?? false,
       queueMaxSize: config.queueMaxSize,
       queueTimeoutMs: config.queueTimeoutMs,
+      concurrencyMultiplier: config.concurrencyMultiplier,
+      queueSizeMultiplier: config.queueSizeMultiplier,
     })
 
     // 应用账号池配置
@@ -97,6 +99,11 @@ async function getProxyServer(): Promise<ProxyServer> {
     // 加载账号
     const accounts = await accountStore.getAvailableAccounts()
     proxyServer.addAccounts(accounts)
+
+    // 初始化后立即计算动态并发
+    if (config.concurrencyMultiplier && config.concurrencyMultiplier > 0) {
+      proxyServer.recalculateDynamicConcurrency()
+    }
 
     logger.info('ProxyServer initialized', { accountCount: accounts.length })
   }
@@ -115,6 +122,8 @@ export async function refreshProxyServerAccounts(): Promise<void> {
       proxyServer.removeAccount(account.id)
     }
     proxyServer.addAccounts(accounts)
+    // 账号数变化后重新计算动态并发
+    proxyServer.recalculateDynamicConcurrency()
     logger.info('ProxyServer accounts refreshed', { count: accounts.length })
   }
 }
@@ -161,6 +170,8 @@ export async function updateProxyServerConfig(): Promise<void> {
     queueEnabled: config.queueEnabled ?? false,
     queueMaxSize: config.queueMaxSize,
     queueTimeoutMs: config.queueTimeoutMs,
+    concurrencyMultiplier: config.concurrencyMultiplier,
+    queueSizeMultiplier: config.queueSizeMultiplier,
   })
 
   proxyServer.updatePoolConfig({

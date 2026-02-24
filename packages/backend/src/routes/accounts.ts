@@ -141,7 +141,7 @@ router.get('/', async (_req: Request, res: Response) => {
   try {
     const accounts = await accountService.getAllAccounts()
 
-    // 隐藏敏感信息
+    // 隐藏敏感信息（Token、Secret 等不返回）
     const safeAccounts = accounts.map(acc => ({
       id: acc.id,
       alias: acc.alias,
@@ -152,7 +152,11 @@ router.get('/', async (_req: Request, res: Response) => {
       region: acc.region,
       machineId: acc.machineId,
       machineIdCreatedAt: acc.machineIdCreatedAt,
+      maxConcurrency: acc.maxConcurrency,
+      proxyUrl: acc.proxyUrl,
       status: acc.status || 'active',
+      statusChangedAt: acc.statusChangedAt,
+      statusReason: acc.statusReason,
       errorCount: acc.errorCount,
       requestCount: acc.requestCount,
       lastUsed: acc.lastUsed,
@@ -204,6 +208,8 @@ router.get('/:id', async (req: Request, res: Response) => {
       profileArn: account.profileArn,
       machineId: account.machineId,
       machineIdCreatedAt: account.machineIdCreatedAt,
+      maxConcurrency: account.maxConcurrency,
+      proxyUrl: account.proxyUrl,
       status: account.status || 'active',
       errorCount: account.errorCount,
       requestCount: account.requestCount,

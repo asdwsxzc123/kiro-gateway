@@ -195,6 +195,9 @@ export interface ProxyAccount {
   // 并发限制
   maxConcurrency?: number          // 单账号最大并发数，0 或不设置表示不限制
 
+  // 代理 IP
+  proxyUrl?: string                // HTTP 代理地址，格式: http://user:pass@host:port
+
   // 运行时状态
   lastUsed?: number
   requestCount?: number
@@ -220,6 +223,7 @@ export interface AddAccountRequest {
   profileArn?: string
   machineId?: string  // 可选，不提供则自动生成
   maxConcurrency?: number
+  proxyUrl?: string
 }
 
 // 更新账号请求
@@ -241,6 +245,7 @@ export interface UpdateAccountRequest {
   statusChangedAt?: number
   statusReason?: string
   maxConcurrency?: number
+  proxyUrl?: string
 }
 
 // ============ 代理服务配置 ============
@@ -273,6 +278,10 @@ export interface ProxyConfig {
   queueEnabled?: boolean       // 是否启用排队，默认 false
   queueMaxSize?: number        // 最大队列长度，默认 2x maxConcurrent
   queueTimeoutMs?: number      // 排队超时时间（毫秒），默认 30s
+
+  // 动态并发配置
+  concurrencyMultiplier?: number  // 动态并发乘数，>0 时：有效并发 = max(maxConcurrent, 乘数 x 可用账号数)
+  queueSizeMultiplier?: number    // 动态队列乘数，>0 时：有效队列 = max(queueMaxSize, 乘数 x 可用账号数)
 
   // Token 刷新配置
   tokenRefreshBeforeExpiry: number  // 提前刷新时间（秒）

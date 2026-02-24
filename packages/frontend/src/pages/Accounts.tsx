@@ -394,6 +394,7 @@ export function Accounts() {
                     邮箱/ID <SortIndicator field="email" />
                   </TableHead>
                   <TableHead>机器码</TableHead>
+                  <TableHead>代理</TableHead>
                   <TableHead>订阅类型</TableHead>
                   <TableHead>状态</TableHead>
                   <TableHead>连接数</TableHead>
@@ -427,6 +428,11 @@ export function Accounts() {
                     <TableCell>
                       <span className="text-xs font-mono text-muted-foreground" title={account.machineId || ""}>
                         {account.machineId ? account.machineId.slice(0, 8) + "..." : "-"}
+                      </span>
+                    </TableCell>
+                    <TableCell>
+                      <span className="text-xs font-mono text-muted-foreground" title={account.proxyUrl ? account.proxyUrl.replace(/\/\/[^@]*@/, "//") : ""}>
+                        {account.proxyUrl ? account.proxyUrl.replace(/\/\/[^@]*@/, "//") : "-"}
                       </span>
                     </TableCell>
                     <TableCell>

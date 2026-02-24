@@ -17,6 +17,7 @@ import type {
 import { KiroApiError } from './types.js'
 import { createLogger } from '../utils/logger.js'
 import { countTokens } from './tokenCounter.js'
+import { proxyFetch } from '../utils/proxyFetch.js'
 
 const logger = createLogger('KiroAPI')
 
@@ -949,12 +950,12 @@ export async function callKiroApiStream(
 
       const headers = getAuthHeaders(account, endpoint, skipAgentMode)
       // console.log(`[Request] headers=${JSON.stringify(headers).slice(0, 200)}`)
-      const response = await fetch(endpoint.url, {
+      const response = await proxyFetch(endpoint.url, {
         method: 'POST',
         headers,
         body: payloadStr,
         signal
-      })
+      }, account.proxyUrl)
 
       if (!response.ok) {
         const body = await response.text()
@@ -1080,12 +1081,12 @@ export async function fetchKiroModels(account: ProxyAccount): Promise<{
   // 注意：不添加 x-amzn-device-id header，machineId 已通过 User-Agent 传递（与 kiro-m 保持一致）
 
   try {
-    let response = await fetch(url, { method: 'GET', headers })
+    let response = await proxyFetch(url, { method: 'GET', headers }, account.proxyUrl)
 
     // 主端点返回 403 时，尝试备用区域端点
     // if (response.status === 403) {
     //   logger.info(`ListAvailableModels primary (${apiRegion}) returned 403, trying fallback (${fallbackRegion})`)
-    //   response = await fetch(`https://codewhisperer.${fallbackRegion}.amazonaws.com/ListAvailableModels?${queryString}`, { method: 'GET', headers })
+    //   response = await proxyFetch(`https://codewhisperer.${fallbackRegion}.amazonaws.com/ListAvailableModels?${queryString}`, { method: 'GET', headers }, account.proxyUrl)
     // }
 
     if (!response.ok) {
@@ -1205,12 +1206,12 @@ export async function fetchUsageLimits(account: ProxyAccount): Promise<UsageLimi
 
   logger.debug('Fetching usage limits', { accountId: account.id, apiRegion })
 
-  let response = await fetch(`https://q.${apiRegion}.amazonaws.com/getUsageLimits?${queryString}`, { method: 'GET', headers })
+  let response = await proxyFetch(`https://q.${apiRegion}.amazonaws.com/getUsageLimits?${queryString}`, { method: 'GET', headers }, account.proxyUrl)
 
   // 主端点返回 403 时，尝试备用区域端点（参考 Kiro 官方插件 fallback 逻辑）
   if (response.status === 403) {
     logger.info(`GetUsageLimits primary (${apiRegion}) returned 403, trying fallback (${fallbackRegion})`)
-    response = await fetch(`https://q.${fallbackRegion}.amazonaws.com/getUsageLimits?${queryString}`, { method: 'GET', headers })
+    response = await proxyFetch(`https://q.${fallbackRegion}.amazonaws.com/getUsageLimits?${queryString}`, { method: 'GET', headers }, account.proxyUrl)
   }
 
   if (!response.ok) {
