@@ -298,6 +298,8 @@ export function Settings() {
       queueEnabled: localConfig.queueEnabled ?? config?.queueEnabled,
       queueMaxSize: localConfig.queueMaxSize ?? config?.queueMaxSize,
       queueTimeoutMs: localConfig.queueTimeoutMs ?? config?.queueTimeoutMs,
+      concurrencyMultiplier: localConfig.concurrencyMultiplier ?? config?.concurrencyMultiplier,
+      queueSizeMultiplier: localConfig.queueSizeMultiplier ?? config?.queueSizeMultiplier,
     })
   }
 
@@ -698,6 +700,7 @@ export function Settings() {
               </div>
 
               {(localConfig.queueEnabled ?? config?.queueEnabled) && (
+                <>
                 <div className="grid gap-4 md:grid-cols-3">
                   <div className="space-y-2">
                     <Label htmlFor="maxConcurrent">最大并发数</Label>
@@ -751,6 +754,47 @@ export function Settings() {
                     </p>
                   </div>
                 </div>
+                <div className="grid gap-4 md:grid-cols-2">
+                  <div className="space-y-2">
+                    <Label htmlFor="concurrencyMultiplier">并发乘数</Label>
+                    <Input
+                      id="concurrencyMultiplier"
+                      type="number"
+                      step="0.5"
+                      min="0"
+                      value={localConfig.concurrencyMultiplier ?? config?.concurrencyMultiplier ?? 0}
+                      onChange={(e) =>
+                        setLocalConfig({
+                          ...localConfig,
+                          concurrencyMultiplier: parseFloat(e.target.value) || 0,
+                        })
+                      }
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      动态模式: 有效并发 = max(最大并发, 乘数 x 可用账号数)，0 = 固定模式
+                    </p>
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="queueSizeMultiplier">队列乘数</Label>
+                    <Input
+                      id="queueSizeMultiplier"
+                      type="number"
+                      step="0.5"
+                      min="0"
+                      value={localConfig.queueSizeMultiplier ?? config?.queueSizeMultiplier ?? 0}
+                      onChange={(e) =>
+                        setLocalConfig({
+                          ...localConfig,
+                          queueSizeMultiplier: parseFloat(e.target.value) || 0,
+                        })
+                      }
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      动态模式: 有效队列 = max(最大队列, 乘数 x 可用账号数)，0 = 固定模式
+                    </p>
+                  </div>
+                </div>
+                </>
               )}
 
               {/* 开关配置 */}

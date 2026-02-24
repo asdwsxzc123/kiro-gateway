@@ -81,6 +81,7 @@ const initialManualForm: AddAccountRequest = {
   provider: "",
   profileArn: "",
   refreshToken: "",
+  proxyUrl: "",
 }
 
 interface AddAccountDialogProps {
@@ -168,6 +169,7 @@ export function AddAccountDialog({ open, onOpenChange }: AddAccountDialogProps) 
         provider: (item.provider as string) || "Enterprise",
         machineId: (item.machineId as string) || undefined,
         email: (item.email as string) || undefined,
+        proxyUrl: (item.proxyUrl as string) || undefined,
       }))
     } catch {
       return null
@@ -789,6 +791,19 @@ export function AddAccountDialog({ open, onOpenChange }: AddAccountDialogProps) 
           value={manualForm.profileArn || ""}
           onChange={(e) =>
             setManualForm({ ...manualForm, profileArn: e.target.value })
+          }
+        />
+      </div>
+
+      {/* 代理 IP */}
+      <div className="grid gap-2">
+        <Label htmlFor="manual-proxyUrl">代理 IP (可选)</Label>
+        <Input
+          id="manual-proxyUrl"
+          placeholder="http://user:pass@host:port"
+          value={manualForm.proxyUrl || ""}
+          onChange={(e) =>
+            setManualForm({ ...manualForm, proxyUrl: e.target.value })
           }
         />
       </div>

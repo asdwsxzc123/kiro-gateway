@@ -53,6 +53,10 @@ export interface GatewayConfig {
   queueMaxSize?: number
   queueTimeoutMs?: number
 
+  // 动态并发配置
+  concurrencyMultiplier?: number
+  queueSizeMultiplier?: number
+
   // 测试配置
   testModelId?: string
 }
@@ -136,6 +140,9 @@ export async function getGatewayConfig(): Promise<GatewayConfig> {
       queueEnabled: data.queueEnabled === 'true',
       ...(data.queueMaxSize && { queueMaxSize: parseInt(data.queueMaxSize, 10) }),
       ...(data.queueTimeoutMs && { queueTimeoutMs: parseInt(data.queueTimeoutMs, 10) }),
+      // 动态并发配置
+      ...(data.concurrencyMultiplier && { concurrencyMultiplier: parseFloat(data.concurrencyMultiplier) }),
+      ...(data.queueSizeMultiplier && { queueSizeMultiplier: parseFloat(data.queueSizeMultiplier) }),
     }
   } catch (error) {
     logger.error('Failed to get gateway config', { error: (error as Error).message })

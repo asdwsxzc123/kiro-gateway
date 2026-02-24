@@ -26,6 +26,7 @@
     "js-tiktoken": "^1.0.21",
     "jsonwebtoken": "^9.0.3",
     "rate-limit-redis": "^4.2.0",
+    "undici": "^7.22.0",
     "uuid": "^11.0.5",
     "winston": "^3.17.0",
     "winston-daily-rotate-file": "^5.0.0"

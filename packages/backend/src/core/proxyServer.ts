@@ -148,12 +148,50 @@ export class ProxyServer {
 
   updateConfig(updates: Partial<ProxyConfig>): void {
     this.config = { ...this.config, ...updates }
-    this.requestQueue.updateConfig(this.config.maxConcurrent, {
+    // 如果启用了动态并发乘数，使用动态计算；否则使用固定值
+    if (this.config.concurrencyMultiplier && this.config.concurrencyMultiplier > 0) {
+      this.recalculateDynamicConcurrency()
+    } else {
+      this.requestQueue.updateConfig(this.config.maxConcurrent, {
+        enabled: this.config.queueEnabled,
+        maxSize: this.config.queueMaxSize,
+        timeoutMs: this.config.queueTimeoutMs
+      })
+    }
+    logger.info('Config updated', { updates })
+  }
+
+  /**
+   * 动态重新计算并发上限
+   * effectiveMax = max(maxConcurrent, floor(multiplier * availableCount))
+   * effectiveQueue = max(queueMaxSize, floor(queueMultiplier * availableCount))
+   */
+  recalculateDynamicConcurrency(): void {
+    const multiplier = this.config.concurrencyMultiplier
+    if (!multiplier || multiplier <= 0) return
+
+    const availableCount = this.accountPool.availableCount
+    const baseMax = this.config.maxConcurrent
+    const effectiveMax = Math.max(baseMax, Math.floor(multiplier * availableCount))
+
+    const queueMultiplier = this.config.queueSizeMultiplier
+    const baseQueueSize = this.config.queueMaxSize ?? baseMax * 2
+    const effectiveQueue = (queueMultiplier && queueMultiplier > 0)
+      ? Math.max(baseQueueSize, Math.floor(queueMultiplier * availableCount))
+      : baseQueueSize
+
+    this.requestQueue.updateConfig(effectiveMax, {
       enabled: this.config.queueEnabled,
-      maxSize: this.config.queueMaxSize,
+      maxSize: effectiveQueue,
       timeoutMs: this.config.queueTimeoutMs
     })
-    logger.info('Config updated', { updates })
+
+    logger.info('Dynamic concurrency recalculated', {
+      availableCount,
+      multiplier,
+      effectiveMax,
+      effectiveQueue
+    })
   }
 
   getConfig(): ProxyConfig {

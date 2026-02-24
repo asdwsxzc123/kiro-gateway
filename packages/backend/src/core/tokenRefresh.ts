@@ -6,6 +6,7 @@
 import { createLogger } from '../utils/logger.js'
 import type { ProxyAccount, TokenRefreshResult } from './types.js'
 import { getKiroUserAgent } from './kiroApi.js'
+import { proxyFetch } from '../utils/proxyFetch.js'
 
 const logger = createLogger('TokenRefresh')
 
@@ -20,7 +21,8 @@ export async function refreshOidcToken(
   refreshToken: string,
   clientId: string,
   clientSecret: string,
-  region: string = 'us-east-1'
+  region: string = 'us-east-1',
+  accountProxyUrl?: string
 ): Promise<TokenRefreshResult> {
   logger.info(`Refreshing OIDC token, region: ${region}`)
 
@@ -37,14 +39,14 @@ export async function refreshOidcToken(
     const controller = new AbortController()
     const timeout = setTimeout(() => controller.abort(), 10000)
 
-    const response = await fetch(url, {
+    const response = await proxyFetch(url, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json'
       },
       body: JSON.stringify(payload),
       signal: controller.signal
-    })
+    }, accountProxyUrl)
     clearTimeout(timeout)
 
     if (!response.ok) {
@@ -84,7 +86,8 @@ export async function refreshOidcToken(
  */
 export async function refreshSocialToken(
   refreshToken: string,
-  machineId?: string
+  machineId?: string,
+  accountProxyUrl?: string
 ): Promise<TokenRefreshResult> {
   logger.info('Refreshing social token')
 
@@ -94,7 +97,7 @@ export async function refreshSocialToken(
     const controller = new AbortController()
     const timeout = setTimeout(() => controller.abort(), 10000)
 
-    const response = await fetch(url, {
+    const response = await proxyFetch(url, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -103,7 +106,7 @@ export async function refreshSocialToken(
       },
       body: JSON.stringify({ refreshToken }),
       signal: controller.signal
-    })
+    }, accountProxyUrl)
     clearTimeout(timeout)
 
     if (!response.ok) {
@@ -148,7 +151,7 @@ export async function refreshTokenByMethod(
   // 社交登录使用 Kiro Auth Service
   if (account.authMethod === 'social') {
     // 关键修复：传递 machineId 给 refreshSocialToken（与 kiro-m 保持一致）
-    return refreshSocialToken(account.refreshToken, account.machineId)
+    return refreshSocialToken(account.refreshToken, account.machineId, account.proxyUrl)
   }
 
   // IdC/BuilderId 使用 OIDC
@@ -160,7 +163,8 @@ export async function refreshTokenByMethod(
     account.refreshToken,
     account.clientId,
     account.clientSecret,
-    account.region || 'us-east-1'
+    account.region || 'us-east-1',
+    account.proxyUrl
   )
 }
 

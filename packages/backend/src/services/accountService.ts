@@ -61,7 +61,8 @@ export async function addAccount(request: AddAccountRequest): Promise<ProxyAccou
       clientSecret: request.clientSecret,
       region: request.region,
       authMethod: request.authMethod,
-      machineId: tempMachineId
+      machineId: tempMachineId,
+      proxyUrl: request.proxyUrl
     }
 
     logger.info('Refreshing token for new account')
@@ -89,7 +90,8 @@ export async function addAccount(request: AddAccountRequest): Promise<ProxyAccou
     region: request.region,
     authMethod: request.authMethod,
     profileArn: request.profileArn,
-    machineId: tempMachineId
+    machineId: tempMachineId,
+    proxyUrl: request.proxyUrl
   }
 
   // 获取 userInfo（同时验证 token 有效性）

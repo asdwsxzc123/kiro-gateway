@@ -82,6 +82,7 @@ export interface Account {
   machineId: string;
   machineIdCreatedAt?: number;
   maxConcurrency?: number;
+  proxyUrl?: string;
   lastUsed?: number;
   requestCount?: number;
   errorCount?: number;
@@ -105,6 +106,7 @@ export interface AddAccountRequest {
   profileArn?: string;
   machineId?: string;
   maxConcurrency?: number;
+  proxyUrl?: string;
 }
 
 export interface AddAccountResponse {
@@ -290,6 +292,10 @@ export interface GatewayConfig {
   queueMaxSize?: number;             // 最大队列长度，默认 2x maxConcurrent
   queueTimeoutMs?: number;           // 排队超时时间（毫秒），默认 30000
 
+  // 动态并发配置
+  concurrencyMultiplier?: number;    // 动态并发乘数，>0 时启用：有效并发 = max(maxConcurrent, 乘数 x 可用账号数)
+  queueSizeMultiplier?: number;      // 动态队列乘数，>0 时启用：有效队列 = max(queueMaxSize, 乘数 x 可用账号数)
+
   // 测试配置
   testModelId?: string;              // 账号验证/测试使用的模型 ID，默认 claude-sonnet-4.5
 }
@@ -355,6 +361,10 @@ export interface UpdateConfigRequest {
   queueEnabled?: boolean;
   queueMaxSize?: number;
   queueTimeoutMs?: number;
+
+  // 动态并发配置
+  concurrencyMultiplier?: number;
+  queueSizeMultiplier?: number;
 
   // 测试配置
   testModelId?: string;
