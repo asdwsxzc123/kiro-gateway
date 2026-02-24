@@ -147,7 +147,7 @@ export function EditAccountDialog({ open, onOpenChange, account }: EditAccountDi
       clientId: editForm.clientId || undefined,
       clientSecret: editForm.clientSecret || undefined,
       maxConcurrency: editForm.maxConcurrency || undefined,
-      proxyUrl: editForm.proxyUrl || undefined,
+      proxyUrl: editForm.proxyUrl,
     }
 
     updateMutation.mutate({ id: account.id, data: updateData })
