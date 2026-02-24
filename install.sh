@@ -170,9 +170,14 @@ create_install_dir() {
     mkdir -p "$INSTALL_DIR"
     mkdir -p "$INSTALL_DIR/data"
     mkdir -p "$INSTALL_DIR/data/backend"
+    mkdir -p "$INSTALL_DIR/logs/requests"
+    mkdir -p "$INSTALL_DIR/logs/system"
     # Set permissions for container user (nodejs uid 1001)
     chmod 777 "$INSTALL_DIR/data"
     chmod 777 "$INSTALL_DIR/data/backend"
+    chmod 777 "$INSTALL_DIR/logs"
+    chmod 777 "$INSTALL_DIR/logs/requests"
+    chmod 777 "$INSTALL_DIR/logs/system"
     cd "$INSTALL_DIR"
 }
 
@@ -230,10 +235,12 @@ services:
       RATE_LIMIT_WINDOW_MS: \${RATE_LIMIT_WINDOW_MS:-60000}
       RATE_LIMIT_MAX_REQUESTS: \${RATE_LIMIT_MAX_REQUESTS:-100}
       LOG_LEVEL: \${LOG_LEVEL:-info}
+      LOG_DIR: /app/logs
       JWT_SECRET: \${JWT_SECRET:-your-jwt-secret-change-in-production}
     volumes:
       - ./data:/app/data
       - ./data/backend:/app/packages/backend/data
+      - ./logs:/app/logs
     depends_on:
       redis:
         condition: service_healthy
@@ -421,10 +428,73 @@ check_installed() {
     return 1
 }
 
+# Ensure logs directories exist (for upgrades from older versions)
+ensure_logs_dir() {
+    mkdir -p "$INSTALL_DIR/logs/requests"
+    mkdir -p "$INSTALL_DIR/logs/system"
+    chmod 777 "$INSTALL_DIR/logs"
+    chmod 777 "$INSTALL_DIR/logs/requests"
+    chmod 777 "$INSTALL_DIR/logs/system"
+}
+
+# Patch docker-compose.yml to add LOG_DIR and logs volume if missing
+patch_compose_file() {
+    if [ ! -f docker-compose.yml ]; then
+        return
+    fi
+
+    local patched=false
+    local manual_needed=false
+
+    # Add LOG_DIR environment variable if missing
+    if ! grep -q "LOG_DIR" docker-compose.yml; then
+        if grep -q "LOG_LEVEL:" docker-compose.yml; then
+            log_info "Patching docker-compose.yml: adding LOG_DIR..."
+            sed -i '/LOG_LEVEL:/a\      LOG_DIR: /app/logs' docker-compose.yml
+            patched=true
+        else
+            manual_needed=true
+        fi
+    fi
+
+    # Add logs volume mount if missing
+    if ! grep -q "./logs:/app/logs" docker-compose.yml; then
+        if grep -q "\./data/backend:/app/packages/backend/data" docker-compose.yml; then
+            log_info "Patching docker-compose.yml: adding logs volume..."
+            sed -i '/\.\/data\/backend:\/app\/packages\/backend\/data/a\      - ./logs:/app/logs' docker-compose.yml
+            patched=true
+        else
+            manual_needed=true
+        fi
+    fi
+
+    if [ "$patched" = true ]; then
+        # Validate YAML syntax after patching
+        if $COMPOSE_CMD config --quiet 2>/dev/null; then
+            log_info "docker-compose.yml patched and validated successfully"
+        else
+            log_error "docker-compose.yml validation failed after patching!"
+            log_warn "Please check docker-compose.yml manually"
+            log_info "Required: environment LOG_DIR=/app/logs and volume ./logs:/app/logs"
+            exit 1
+        fi
+    fi
+
+    if [ "$manual_needed" = true ]; then
+        log_warn "Could not auto-patch docker-compose.yml (file structure differs from template)"
+        log_warn "Please manually add the following to your docker-compose.yml:"
+        log_info "  Under gateway.environment:  LOG_DIR: /app/logs"
+        log_info "  Under gateway.volumes:      - ./logs:/app/logs"
+    fi
+}
+
 # Upgrade services
 upgrade() {
     log_step "Installation detected, upgrading..."
     cd "$INSTALL_DIR"
+
+    ensure_logs_dir
+    patch_compose_file
 
     log_step "Pulling latest images..."
     $COMPOSE_CMD pull
