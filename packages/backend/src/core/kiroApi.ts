@@ -1053,6 +1053,12 @@ export async function callKiroApi(
   })
 }
 
+
+/** 获取 Q Service base URL（仅 us-east-1 和 eu-central-1） */
+function getQServiceEndpoint(region?: string): string {
+  if (region?.startsWith('eu-')) return 'https://q.eu-central-1.amazonaws.com'
+  return 'https://q.us-east-1.amazonaws.com'
+}
 /**
  * 获取 Kiro 官方模型列表
  */
@@ -1060,9 +1066,12 @@ export async function fetchKiroModels(account: ProxyAccount): Promise<{
   models: { modelId: string; modelName: string; description: string }[]
   error?: string
 }> {
-  const apiRegion = mapToApiRegion(account.region)
-  const fallbackRegion = apiRegion === 'eu-central-1' ? 'us-east-1' : 'eu-central-1'
-  const queryString = 'origin=AI_EDITOR&maxResults=50'
+  const baseUrl = getQServiceEndpoint(account.region)
+  const params = new URLSearchParams({ origin: 'AI_EDITOR', maxResults: '50' })
+  const url = `${baseUrl}/ListAvailableModels?${params.toString()}`
+  // const apiRegion = mapToApiRegion(account.region)
+  // const fallbackRegion = apiRegion === 'eu-central-1' ? 'us-east-1' : 'eu-central-1'
+  // const queryString = 'origin=AI_EDITOR&maxResults=50'
   const machineId = account.machineId
 
   const headers: Record<string, string> = {
@@ -1077,13 +1086,13 @@ export async function fetchKiroModels(account: ProxyAccount): Promise<{
   // 注意：不添加 x-amzn-device-id header，machineId 已通过 User-Agent 传递（与 kiro-m 保持一致）
 
   try {
-    let response = await fetch(`https://codewhisperer.${apiRegion}.amazonaws.com/ListAvailableModels?${queryString}`, { method: 'GET', headers })
+    let response = await fetch(url, { method: 'GET', headers })
 
     // 主端点返回 403 时，尝试备用区域端点
-    if (response.status === 403) {
-      logger.info(`ListAvailableModels primary (${apiRegion}) returned 403, trying fallback (${fallbackRegion})`)
-      response = await fetch(`https://codewhisperer.${fallbackRegion}.amazonaws.com/ListAvailableModels?${queryString}`, { method: 'GET', headers })
-    }
+    // if (response.status === 403) {
+    //   logger.info(`ListAvailableModels primary (${apiRegion}) returned 403, trying fallback (${fallbackRegion})`)
+    //   response = await fetch(`https://codewhisperer.${fallbackRegion}.amazonaws.com/ListAvailableModels?${queryString}`, { method: 'GET', headers })
+    // }
 
     if (!response.ok) {
       const errorMsg = `ListAvailableModels failed with status ${response.status}`
