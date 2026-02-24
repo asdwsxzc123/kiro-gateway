@@ -7,6 +7,7 @@ import { Router, Request, Response } from 'express'
 import type { Router as IRouter } from 'express'
 import { createLogger } from '../utils/logger.js'
 import * as statsService from '../services/statsService.js'
+import { getConcurrencyStatus } from './proxy.js'
 import type { ApiResponse } from '../core/types.js'
 
 const logger = createLogger('StatsRoute')
@@ -91,6 +92,23 @@ router.get('/models', async (_req: Request, res: Response) => {
     res.json({ success: true, data: stats } as ApiResponse)
   } catch (error) {
     logger.error('Failed to get model stats', { error: (error as Error).message })
+    res.status(500).json({
+      success: false,
+      error: { message: (error as Error).message }
+    } as ApiResponse)
+  }
+})
+
+/**
+ * 获取并发状态（每账号实时连接数 + 队列状态）
+ * GET /api/stats/concurrency
+ */
+router.get('/concurrency', (_req: Request, res: Response) => {
+  try {
+    const status = getConcurrencyStatus()
+    res.json({ success: true, data: status } as ApiResponse)
+  } catch (error) {
+    logger.error('Failed to get concurrency status', { error: (error as Error).message })
     res.status(500).json({
       success: false,
       error: { message: (error as Error).message }

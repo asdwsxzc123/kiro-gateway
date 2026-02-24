@@ -23,6 +23,7 @@ import type {
 } from './types.js'
 import { KiroApiError } from './types.js'
 import { AccountPool } from './accountPool.js'
+import type { PoolConfig } from './accountPool.js'
 import {
   claudeToKiro,
   kiroToClaudeResponse,
@@ -157,6 +158,11 @@ export class ProxyServer {
 
   getConfig(): ProxyConfig {
     return { ...this.config }
+  }
+
+  updatePoolConfig(config: Partial<PoolConfig>): void {
+    this.accountPool.updatePoolConfig(config)
+    logger.info('Pool config updated', { config })
   }
 
   // ============ 账号管理 ============
@@ -318,7 +324,7 @@ export class ProxyServer {
           expiresAt: result.expiresAt
         })
         this.accountPool.clearNeedsRefresh(account.id)
-        this.accountPool.setStatus(account.id, 'active')
+        this.accountPool.setStatus(account.id, 'active', 'Token 刷新成功')
         logger.info('Token refreshed successfully', { accountId: account.id })
         return true
       } else {
@@ -418,6 +424,24 @@ export class ProxyServer {
     return Array.from(this.inflightRequests.values())
   }
 
+  /**
+   * 获取并发状态概览（队列 + 每账号并发数）
+   */
+  getConcurrencyStatus(): {
+    queue: { active: number; queued: number; maxConcurrent: number }
+    accounts: Array<{ accountId: string; concurrency: number }>
+  } {
+    const concurrencyMap = this.accountPool.getAllConcurrency()
+    const accounts = Array.from(concurrencyMap.entries()).map(([accountId, concurrency]) => ({
+      accountId,
+      concurrency
+    }))
+    return {
+      queue: this.requestQueue.getStatus(),
+      accounts
+    }
+  }
+
   resetStats(): void {
     this.stats = this.initStats()
     this.accountPool.resetAllStats()
@@ -435,7 +459,7 @@ export class ProxyServer {
     this.stats.failedRequests++
   }
 
-  private recordRequest(log: Partial<RequestLog>): void {
+  private recordRequest(log: Partial<RequestLog>, messages?: unknown[]): void {
     const requestLog: RequestLog = {
       id: uuidv4(),
       timestamp: Date.now(),
@@ -465,7 +489,7 @@ export class ProxyServer {
     this.events.onStatsUpdate?.(this.stats)
 
     // 写入 Redis 持久化日志
-    logStore.addRequestLog(requestLog).catch(err => {
+    logStore.addRequestLog(requestLog, messages).catch(err => {
       logger.error('Failed to persist request log', { error: (err as Error).message })
     })
   }
@@ -548,8 +572,8 @@ export class ProxyServer {
 
         // 402: 月度用量耗尽，自动暂停并切换账号
         if (errorMsg.includes('402') || errorMsg.includes('MONTHLY_REQUEST_COUNT')) {
-          this.accountPool.setStatus(currentAccount.id, 'paused')
-          accountStore.updateAccount(currentAccount.id, { status: 'paused' }).catch(() => {})
+          this.accountPool.setStatus(currentAccount.id, 'paused', '月度用量耗尽 (402)')
+          accountStore.updateAccount(currentAccount.id, { status: 'paused', statusReason: '月度用量耗尽 (402)' }).catch(() => {})
           logger.warn('Account auto-paused due to monthly limit', { accountId: currentAccount.id })
           const nextAccount = this.accountPool.getNextAvailableAccount(currentAccount.id)
           if (nextAccount) {
@@ -561,8 +585,8 @@ export class ProxyServer {
 
         // 检测账号被封禁（TEMPORARILY_SUSPENDED）
         if (errorMsg.includes('TEMPORARILY_SUSPENDED') || errorMsg.includes('temporarily is suspended')) {
-          this.accountPool.setStatus(currentAccount.id, 'suspended')
-          accountStore.updateAccount(currentAccount.id, { status: 'suspended' }).catch(() => {})
+          this.accountPool.setStatus(currentAccount.id, 'suspended', '账号被封禁 (TEMPORARILY_SUSPENDED)')
+          accountStore.updateAccount(currentAccount.id, { status: 'suspended', statusReason: '账号被封禁 (TEMPORARILY_SUSPENDED)' }).catch(() => {})
           logger.warn('Account suspended (banned by Kiro), switching account', { accountId: currentAccount.id })
           const nextAccount = this.accountPool.getNextAvailableAccount(currentAccount.id)
           if (nextAccount) {
@@ -641,7 +665,7 @@ export class ProxyServer {
     _headers?: Record<string, string>,
     boundAccountIds?: string[],
     signal?: AbortSignal
-  ): Promise<{ success: boolean; response?: unknown; error?: string }> {
+  ): Promise<{ success: boolean; response?: unknown; error?: string; statusCode?: number }> {
     let release: (() => void) | undefined
     const reqId = uuidv4()
     try {
@@ -655,7 +679,8 @@ export class ProxyServer {
     } catch (error) {
       if (!release) {
         // Queue full or timeout — not yet acquired
-        return { success: false, error: (error as Error).message }
+        const statusCode = error instanceof KiroApiError ? error.statusCode : 500
+        return { success: false, error: (error as Error).message, statusCode }
       }
       throw error
     } finally {
@@ -669,7 +694,7 @@ export class ProxyServer {
     _headers?: Record<string, string>,
     boundAccountIds?: string[],
     signal?: AbortSignal
-  ): Promise<{ success: boolean; response?: unknown; error?: string }> {
+  ): Promise<{ success: boolean; response?: unknown; error?: string; statusCode?: number }> {
     this.recordNewRequest()
     this.events.onRequest?.({ path: '/v1/messages', method: 'POST' })
     const effectiveRequest = this.getEffectiveRequest(request)
@@ -807,7 +832,7 @@ export class ProxyServer {
           success: true,
           auxiliary: false,
           userInput
-        })
+        }, effectiveRequest.messages)
       }
 
       // 仅非辅助请求更新计费统计
@@ -858,14 +883,15 @@ export class ProxyServer {
       this.recordRequestFailed()
       this.accountPool.recordError(account.id, false)
 
+      const statusCode = error instanceof KiroApiError ? error.statusCode : 500
       this.events.onResponse?.({
         path: '/v1/messages',
         model: effectiveRequest.model,
-        status: 500,
+        status: statusCode,
         error: (error as Error).message
       })
 
-      return { success: false, error: (error as Error).message }
+      return { success: false, error: (error as Error).message, statusCode }
     } finally {
       this.accountPool.decrementConcurrency(account.id)
     }
@@ -1046,15 +1072,17 @@ export class ProxyServer {
         skipBilling,
         userInput,
         topicDetection,
+        effectiveRequest.messages,
         signal
       )
 
       callbacks.onComplete()
     } catch (error) {
+      const statusCode = error instanceof KiroApiError ? error.statusCode : 500
       this.events.onResponse?.({
         path: '/v1/messages',
         model: effectiveRequest.model,
-        status: 500,
+        status: statusCode,
         error: (error as Error).message
       })
 
@@ -1087,6 +1115,7 @@ export class ProxyServer {
     skipBilling?: boolean,
     userInput?: string,
     skipRecording?: boolean,
+    messages?: unknown[],
     signal?: AbortSignal
   ): Promise<void> {
     const id = msgId || `msg_${uuidv4()}`
@@ -1398,7 +1427,7 @@ export class ProxyServer {
               success: true,
               auxiliary: false,
               userInput
-            })
+            }, messages)
           }
 
           // 仅非辅助请求更新计费统计
@@ -1512,6 +1541,7 @@ export class ProxyServer {
                 skipBilling,   // preserve billing flag
                 userInput,     // preserve user input
                 skipRecording, // preserve recording flag
+                messages,      // preserve messages for file logging
                 signal         // propagate abort signal
               )
             } catch (error) {
@@ -1547,8 +1577,8 @@ export class ProxyServer {
 
           // 402 月度用量耗尽，自动暂停
           if (error.message.includes('402') || error.message.includes('MONTHLY_REQUEST_COUNT')) {
-            this.accountPool.setStatus(account.id, 'paused')
-            accountStore.updateAccount(account.id, { status: 'paused' }).catch(() => {})
+            this.accountPool.setStatus(account.id, 'paused', '月度用量耗尽 (402 stream)')
+            accountStore.updateAccount(account.id, { status: 'paused', statusReason: '月度用量耗尽 (402 stream)' }).catch(() => {})
             logger.warn('Account auto-paused due to monthly limit (stream)', { accountId: account.id })
           }
 

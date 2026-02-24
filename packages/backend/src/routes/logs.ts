@@ -158,4 +158,57 @@ router.delete('/system', async (_req: Request, res: Response) => {
   }
 })
 
+/**
+ * 获取日志文件列表
+ * GET /api/logs/files
+ */
+router.get('/files', async (_req: Request, res: Response) => {
+  try {
+    const files = await logService.getLogFiles()
+    res.json({ success: true, data: files } as ApiResponse)
+  } catch (error) {
+    logger.error('Failed to get log files', { error: (error as Error).message })
+    res.status(500).json({
+      success: false,
+      error: { message: (error as Error).message }
+    } as ApiResponse)
+  }
+})
+
+/**
+ * 下载日志文件
+ * GET /api/logs/files/download?type=requests&filename=requests-2026-02-23.log
+ */
+router.get('/files/download', async (req: Request, res: Response) => {
+  try {
+    const type = req.query.type as string
+    const filename = req.query.filename as string
+
+    if (!type || !filename) {
+      res.status(400).json({
+        success: false,
+        error: { message: 'Missing type or filename parameter' }
+      } as ApiResponse)
+      return
+    }
+
+    const filePath = await logService.getLogFilePath(type, filename)
+    if (!filePath) {
+      res.status(404).json({
+        success: false,
+        error: { message: 'File not found or invalid filename' }
+      } as ApiResponse)
+      return
+    }
+
+    res.download(filePath, filename)
+  } catch (error) {
+    logger.error('Failed to download log file', { error: (error as Error).message })
+    res.status(500).json({
+      success: false,
+      error: { message: (error as Error).message }
+    } as ApiResponse)
+  }
+})
+
 export default router

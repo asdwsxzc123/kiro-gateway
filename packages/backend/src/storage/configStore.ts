@@ -32,12 +32,26 @@ export interface GatewayConfig {
   autoContinueRounds?: number
   toolCallAutoRounds?: number
   autoSwitchOnQuotaExhausted?: boolean
+  enableRequestLogging?: boolean
+  tokenRefreshBeforeExpiry?: number
+
+  // 账号池配置
+  errorCooldownTime?: number
+  maxConsecutiveErrors?: number
+  quotaResetTime?: number
+  autoStopErrorCodes?: string
+  autoStopErrorPatterns?: string
+  quotaUsageThreshold?: number
 
   // 限流配置
   rateLimitEnabled: boolean
   rateLimitWindow: number
   rateLimitMax: number
 
+  // 并发排队配置
+  queueEnabled?: boolean
+  queueMaxSize?: number
+  queueTimeoutMs?: number
 }
 
 const DEFAULT_CONFIG: GatewayConfig = {
@@ -79,10 +93,15 @@ export async function getGatewayConfig(): Promise<GatewayConfig> {
       ? data.autoSwitchOnQuotaExhausted === 'true'
       : (DEFAULT_CONFIG.autoSwitchOnQuotaExhausted ?? true)
 
+    // 字段别名处理：前端可能发送不同名的字段
+    const enableMultiAccountRaw = data.enableMultiAccount ?? data.multiAccountEnabled
+    const enableRequestLoggingRaw = data.enableRequestLogging ?? data.logRequests
+    const tokenRefreshBeforeExpiryRaw = data.tokenRefreshBeforeExpiry ?? data.tokenRefreshAdvance
+
     return {
       port: parseInt(data.port, 10) || DEFAULT_CONFIG.port,
       host: data.host || DEFAULT_CONFIG.host,
-      enableMultiAccount: data.enableMultiAccount === 'true',
+      enableMultiAccount: enableMultiAccountRaw !== undefined ? enableMultiAccountRaw === 'true' : DEFAULT_CONFIG.enableMultiAccount,
       maxConcurrent: parseInt(data.maxConcurrent, 10) || DEFAULT_CONFIG.maxConcurrent,
       maxRetries: parseInt(data.maxRetries, 10) || DEFAULT_CONFIG.maxRetries,
       retryDelay: parseInt(data.retryDelay, 10) || DEFAULT_CONFIG.retryDelay,
@@ -94,6 +113,10 @@ export async function getGatewayConfig(): Promise<GatewayConfig> {
       autoContinueRounds,
       toolCallAutoRounds: autoContinueRounds,
       autoSwitchOnQuotaExhausted,
+      enableRequestLogging: enableRequestLoggingRaw !== undefined ? enableRequestLoggingRaw === 'true' : true,
+      tokenRefreshBeforeExpiry: tokenRefreshBeforeExpiryRaw !== undefined
+        ? (parseInt(tokenRefreshBeforeExpiryRaw, 10) || 300)
+        : 300,
       rateLimitEnabled: data.rateLimitEnabled === 'true',
       rateLimitWindow: parseInt(data.rateLimitWindow, 10) || DEFAULT_CONFIG.rateLimitWindow,
       rateLimitMax: parseInt(data.rateLimitMax, 10) || DEFAULT_CONFIG.rateLimitMax,
@@ -105,6 +128,10 @@ export async function getGatewayConfig(): Promise<GatewayConfig> {
       ...(data.autoStopErrorCodes && { autoStopErrorCodes: data.autoStopErrorCodes }),
       ...(data.autoStopErrorPatterns && { autoStopErrorPatterns: data.autoStopErrorPatterns }),
       ...(data.quotaUsageThreshold && { quotaUsageThreshold: parseInt(data.quotaUsageThreshold, 10) }),
+      // 并发排队配置
+      queueEnabled: data.queueEnabled === 'true',
+      ...(data.queueMaxSize && { queueMaxSize: parseInt(data.queueMaxSize, 10) }),
+      ...(data.queueTimeoutMs && { queueTimeoutMs: parseInt(data.queueTimeoutMs, 10) }),
     }
   } catch (error) {
     logger.error('Failed to get gateway config', { error: (error as Error).message })
@@ -119,14 +146,35 @@ export async function updateGatewayConfig(updates: Partial<GatewayConfig>): Prom
   const redis = getRedisClient()
 
   try {
+    // 字段归一化：将前端别名统一为标准字段名
+    const normalized = { ...updates } as Record<string, unknown>
+    if ('multiAccountEnabled' in normalized) {
+      normalized.enableMultiAccount = normalized.multiAccountEnabled
+      delete normalized.multiAccountEnabled
+    }
+    if ('logRequests' in normalized) {
+      normalized.enableRequestLogging = normalized.logRequests
+      delete normalized.logRequests
+    }
+    if ('tokenRefreshAdvance' in normalized) {
+      normalized.tokenRefreshBeforeExpiry = normalized.tokenRefreshAdvance
+      delete normalized.tokenRefreshAdvance
+    }
+
     const current = await getGatewayConfig()
-    const updated = { ...current, ...updates }
+    const updated = { ...current, ...normalized }
 
     const data: Record<string, string> = {}
     for (const [key, value] of Object.entries(updated)) {
       if (value !== undefined && value !== null) {
         data[key] = String(value)
       }
+    }
+
+    // 清除已归一化的旧别名键，避免 Redis 中出现同义不同名的重复 key
+    const aliasKeys = ['multiAccountEnabled', 'logRequests', 'tokenRefreshAdvance']
+    for (const aliasKey of aliasKeys) {
+      await redis.hdel(CONFIG_KEY, aliasKey)
     }
 
     await redis.hset(CONFIG_KEY, data)

@@ -295,6 +295,9 @@ export function Settings() {
       multiAccountEnabled: localConfig.multiAccountEnabled ?? config?.multiAccountEnabled,
       maxConcurrent: localConfig.maxConcurrent ?? config?.maxConcurrent,
       autoSwitchOnQuotaExhausted: localConfig.autoSwitchOnQuotaExhausted ?? config?.autoSwitchOnQuotaExhausted,
+      queueEnabled: localConfig.queueEnabled ?? config?.queueEnabled,
+      queueMaxSize: localConfig.queueMaxSize ?? config?.queueMaxSize,
+      queueTimeoutMs: localConfig.queueTimeoutMs ?? config?.queueTimeoutMs,
     })
   }
 
@@ -675,26 +678,79 @@ export function Settings() {
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-6">
-              {/* 并发配置 */}
-              <div className="grid gap-4 md:grid-cols-2">
-                <div className="space-y-2">
-                  <Label htmlFor="maxConcurrent">最大并发数</Label>
-                  <Input
-                    id="maxConcurrent"
-                    type="number"
-                    value={localConfig.maxConcurrent ?? config?.maxConcurrent ?? 10}
-                    onChange={(e) =>
-                      setLocalConfig({
-                        ...localConfig,
-                        maxConcurrent: parseInt(e.target.value),
-                      })
+              {/* 并发控制 */}
+              <div className="space-y-4">
+                <div className="flex items-center justify-between">
+                  <div className="space-y-0.5">
+                    <Label>启用并发限制</Label>
+                    <p className="text-sm text-muted-foreground">
+                      关闭时不限制并发数，所有请求直接放行；开启后超过最大并发数的请求将排队等待
+                    </p>
+                  </div>
+                  <Switch
+                    checked={localConfig.queueEnabled ?? config?.queueEnabled ?? false}
+                    onCheckedChange={(checked) =>
+                      setLocalConfig({ ...localConfig, queueEnabled: checked })
                     }
                   />
-                  <p className="text-xs text-muted-foreground">
-                    同时处理的最大请求数，默认 10
-                  </p>
                 </div>
               </div>
+
+              {(localConfig.queueEnabled ?? config?.queueEnabled) && (
+                <div className="grid gap-4 md:grid-cols-3">
+                  <div className="space-y-2">
+                    <Label htmlFor="maxConcurrent">最大并发数</Label>
+                    <Input
+                      id="maxConcurrent"
+                      type="number"
+                      value={localConfig.maxConcurrent ?? config?.maxConcurrent ?? 10}
+                      onChange={(e) =>
+                        setLocalConfig({
+                          ...localConfig,
+                          maxConcurrent: parseInt(e.target.value),
+                        })
+                      }
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      同时处理的最大请求数
+                    </p>
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="queueMaxSize">最大队列长度</Label>
+                    <Input
+                      id="queueMaxSize"
+                      type="number"
+                      value={localConfig.queueMaxSize ?? config?.queueMaxSize ?? (localConfig.maxConcurrent ?? config?.maxConcurrent ?? 10) * 2}
+                      onChange={(e) =>
+                        setLocalConfig({
+                          ...localConfig,
+                          queueMaxSize: parseInt(e.target.value),
+                        })
+                      }
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      超过队列长度的请求将直接拒绝
+                    </p>
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="queueTimeoutMs">排队超时 (ms)</Label>
+                    <Input
+                      id="queueTimeoutMs"
+                      type="number"
+                      value={localConfig.queueTimeoutMs ?? config?.queueTimeoutMs ?? 30000}
+                      onChange={(e) =>
+                        setLocalConfig({
+                          ...localConfig,
+                          queueTimeoutMs: parseInt(e.target.value),
+                        })
+                      }
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      排队等待超过此时间将被拒绝
+                    </p>
+                  </div>
+                </div>
+              )}
 
               {/* 开关配置 */}
               <div className="space-y-4">

@@ -36,6 +36,22 @@ export interface TopCostItem {
 }
 
 /**
+ * 并发状态类型
+ */
+export interface ConcurrencyStatus {
+  queue: { active: number; queued: number; maxConcurrent: number }
+  accounts: Array<{ accountId: string; concurrency: number }>
+}
+
+/**
+ * 获取并发状态（每账号实时连接数 + 队列状态）
+ */
+export async function getConcurrencyStatus(): Promise<ConcurrencyStatus> {
+  const response = await apiClient.get<ApiResponse<ConcurrencyStatus>>("/stats/concurrency")
+  return response.data.data!
+}
+
+/**
  * 获取统计概览数据
  */
 export async function getStats(): Promise<StatsOverview> {

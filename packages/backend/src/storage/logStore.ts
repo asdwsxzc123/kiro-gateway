@@ -4,7 +4,7 @@
  */
 
 import { getRedisClient } from './redis.js'
-import { createLogger } from '../utils/logger.js'
+import { createLogger, requestFileLogger, systemFileLogger } from '../utils/logger.js'
 import type { RequestLog, SystemLog } from '../core/types.js'
 import { v4 as uuidv4 } from 'uuid'
 
@@ -24,7 +24,7 @@ const LOG_RETENTION_MS = 5 * 24 * 60 * 60 * 1000
 /**
  * 添加请求日志
  */
-export async function addRequestLog(log: Omit<RequestLog, 'id'>): Promise<string> {
+export async function addRequestLog(log: Omit<RequestLog, 'id'>, messages?: unknown[]): Promise<string> {
   const redis = getRedisClient()
 
   try {
@@ -84,6 +84,13 @@ export async function addRequestLog(log: Omit<RequestLog, 'id'>): Promise<string
     // 清理超过 5 天的日志（Redis Stream ID 基于时间戳）
     const minId = Date.now() - LOG_RETENTION_MS
     await redis.xtrim(REQUEST_LOGS_STREAM, 'MINID', '~', minId)
+
+    // 写入文件日志（含完整 messages）
+    requestFileLogger.info('request', {
+      ...log,
+      id,
+      ...(messages ? { messages } : {})
+    })
 
     return id
   } catch (error) {
@@ -202,6 +209,12 @@ export async function addSystemLog(log: Omit<SystemLog, 'id'>): Promise<string> 
     // 清理超过 5 天的日志
     const minId = Date.now() - LOG_RETENTION_MS
     await redis.xtrim(SYSTEM_LOGS_STREAM, 'MINID', '~', minId)
+
+    // 写入文件日志
+    systemFileLogger.info('system', {
+      ...log,
+      id
+    })
 
     return id
   } catch (error) {

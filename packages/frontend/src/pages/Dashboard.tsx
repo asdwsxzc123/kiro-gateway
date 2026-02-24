@@ -363,6 +363,16 @@ export function Dashboard() {
                   </span>
                   <span className="ml-auto text-xs text-muted-foreground">
                     {account.status === 'active' ? "正常" : account.status === 'paused' ? "已暂停" : account.status === 'suspended' ? "已封号" : "异常挂起"}
+                    {account.status !== 'active' && account.statusChangedAt && (
+                      <span className="ml-1">
+                        {new Date(account.statusChangedAt).toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" })}
+                      </span>
+                    )}
+                    {account.status !== 'active' && account.statusReason && (
+                      <span className="ml-1" title={account.statusReason}>
+                        {account.statusReason.length > 15 ? account.statusReason.slice(0, 15) + '...' : account.statusReason}
+                      </span>
+                    )}
                   </span>
                 </div>
               ))}

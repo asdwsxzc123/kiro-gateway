@@ -9,6 +9,10 @@ Kiro Gateway is an independent API gateway service that provides OpenAI/Claude-c
 - **Package Manager**: pnpm 9.0 (monorepo)
 - **Language**: TypeScript 5.9 (strict mode)
 
+## 核心规范
+1. 代码行数不要超过300行，遇到重构，放入合适的文件夹
+
+
 ## Monorepo Structure
 
 ```
