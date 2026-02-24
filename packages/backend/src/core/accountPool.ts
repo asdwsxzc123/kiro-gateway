@@ -7,6 +7,9 @@
 import type { ProxyAccount } from './types.js'
 import type { AccountStatus } from '@kiro-gateway/shared'
 import { notify } from './webhook.js'
+import { createLogger } from '../utils/logger.js'
+
+const logger = createLogger('AccountPool')
 
 export type { AccountStatus }
 
@@ -115,30 +118,45 @@ export class AccountPool {
   }
 
   /**
+   * 获取内存池中的账号总数
+   */
+  getPoolSize(): number {
+    return this.accountOrder.length
+  }
+
+  /**
    * 获取下一个可用账号（LRU + 并发感知策略）
    * 优先选择并发数最低的账号，并发数相同时选择 lastUsed 最早的
    */
   getNextAccount(): ProxyAccount | null {
-    if (this.accountOrder.length === 0) return null
+    if (this.accountOrder.length === 0) {
+      logger.warn('Account pool is empty, no accounts loaded')
+      return null
+    }
 
     const now = Date.now()
     let bestAccount: ProxyAccount | null = null
     let bestConcurrency = Infinity
     let bestLastUsed = Infinity
+    const skipReasons: { id: string; alias?: string; reason: string }[] = []
 
     for (const id of this.accountOrder) {
       const account = this.accounts.get(id)
       const stats = this.accountStats.get(id)
+      const label = account?.alias || account?.email || id.slice(0, 8)
 
-      if (!account || !stats) continue
-      if (!this.isActive(account)) continue
-      if (account.cooldownUntil && account.cooldownUntil > now) continue
-      if (stats.needsRefresh) continue
+      if (!account || !stats) { skipReasons.push({ id, reason: 'not_in_pool' }); continue }
+      if (!this.isActive(account)) { skipReasons.push({ id, alias: label, reason: `status=${account.status}` }); continue }
+      if (account.cooldownUntil && account.cooldownUntil > now) { skipReasons.push({ id, alias: label, reason: `cooldown ${Math.ceil((account.cooldownUntil - now) / 1000)}s` }); continue }
+      if (stats.needsRefresh) { skipReasons.push({ id, alias: label, reason: 'needsRefresh' }); continue }
 
       const concurrency = this.activeConcurrency.get(id) || 0
 
       // 检查单账号并发上限
-      if (account.maxConcurrency && account.maxConcurrency > 0 && concurrency >= account.maxConcurrency) continue
+      if (account.maxConcurrency && account.maxConcurrency > 0 && concurrency >= account.maxConcurrency) {
+        skipReasons.push({ id, alias: label, reason: `concurrency ${concurrency}/${account.maxConcurrency}` })
+        continue
+      }
 
       const lastUsed = stats.lastUsed || 0
 
@@ -148,6 +166,10 @@ export class AccountPool {
         bestLastUsed = lastUsed
         bestAccount = account
       }
+    }
+
+    if (!bestAccount && skipReasons.length > 0) {
+      logger.warn('All accounts skipped', { total: this.accountOrder.length, reasons: skipReasons })
     }
 
     return bestAccount
@@ -392,20 +414,25 @@ export class AccountPool {
     let bestAccount: ProxyAccount | null = null
     let bestConcurrency = Infinity
     let bestLastUsed = Infinity
+    const skipReasons: { id: string; alias?: string; reason: string }[] = []
 
     for (const id of accountIds) {
       const account = this.accounts.get(id)
       const stats = this.accountStats.get(id)
+      const label = account?.alias || account?.email || id.slice(0, 8)
 
-      if (!account || !stats) continue
-      if (!this.isActive(account)) continue
-      if (stats.needsRefresh) continue
-      if (account.cooldownUntil && account.cooldownUntil > now) continue
+      if (!account || !stats) { skipReasons.push({ id, reason: 'not_in_pool' }); continue }
+      if (!this.isActive(account)) { skipReasons.push({ id, alias: label, reason: `status=${account.status}` }); continue }
+      if (stats.needsRefresh) { skipReasons.push({ id, alias: label, reason: 'needsRefresh' }); continue }
+      if (account.cooldownUntil && account.cooldownUntil > now) { skipReasons.push({ id, alias: label, reason: `cooldown ${Math.ceil((account.cooldownUntil - now) / 1000)}s` }); continue }
 
       const concurrency = this.activeConcurrency.get(id) || 0
 
       // 检查单账号并发上限
-      if (account.maxConcurrency && account.maxConcurrency > 0 && concurrency >= account.maxConcurrency) continue
+      if (account.maxConcurrency && account.maxConcurrency > 0 && concurrency >= account.maxConcurrency) {
+        skipReasons.push({ id, alias: label, reason: `concurrency ${concurrency}/${account.maxConcurrency}` })
+        continue
+      }
 
       const lastUsed = stats.lastUsed || 0
 
@@ -414,6 +441,10 @@ export class AccountPool {
         bestLastUsed = lastUsed
         bestAccount = account
       }
+    }
+
+    if (!bestAccount && skipReasons.length > 0) {
+      logger.warn('All bound accounts skipped', { subset: accountIds.length, reasons: skipReasons })
     }
 
     return bestAccount

@@ -383,8 +383,33 @@ export class ProxyServer {
       }
     }
 
+    // 池非空但选不到账号时，短暂等待后重试（单账号场景下 cooldown/refresh 是瞬态的）
+    if (!account && this.accountPool.getPoolSize() > 0) {
+      const maxWaitMs = 5000
+      const intervalMs = 500
+      let waited = 0
+      logger.info('All accounts temporarily unavailable, waiting for recovery', {
+        poolSize: this.accountPool.getPoolSize(),
+        bound: boundAccountIds?.length ?? 0
+      })
+      while (waited < maxWaitMs) {
+        await new Promise(resolve => setTimeout(resolve, intervalMs))
+        waited += intervalMs
+        if (boundAccountIds && boundAccountIds.length > 0) {
+          account = this.accountPool.getNextAccountFromSubset(boundAccountIds)
+        } else {
+          account = this.accountPool.getNextAccount()
+        }
+        if (account) break
+      }
+      if (account) {
+        logger.info('Account recovered after wait', { accountId: account.id, waitedMs: waited })
+      }
+    }
+
     if (!account) {
       logger.warn('No available accounts', {
+        poolSize: this.accountPool.getPoolSize(),
         bound: boundAccountIds?.length ?? 0
       })
       return null
