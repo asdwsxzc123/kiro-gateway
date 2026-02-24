@@ -52,6 +52,9 @@ export interface GatewayConfig {
   queueEnabled?: boolean
   queueMaxSize?: number
   queueTimeoutMs?: number
+
+  // 测试配置
+  testModelId?: string
 }
 
 const DEFAULT_CONFIG: GatewayConfig = {
@@ -68,7 +71,8 @@ const DEFAULT_CONFIG: GatewayConfig = {
   autoSwitchOnQuotaExhausted: true,
   rateLimitEnabled: false,
   rateLimitWindow: 60000,
-  rateLimitMax: 100
+  rateLimitMax: 100,
+  testModelId: 'claude-sonnet-4.5'
 }
 
 /**

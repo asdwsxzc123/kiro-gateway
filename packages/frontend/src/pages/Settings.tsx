@@ -378,6 +378,7 @@ export function Settings() {
       preferredEndpoint: localConfig.preferredEndpoint ?? config?.preferredEndpoint,
       defaultRegion: localConfig.defaultRegion ?? config?.defaultRegion,
       enableRequestLogging: localConfig.enableRequestLogging ?? config?.enableRequestLogging,
+      testModelId: localConfig.testModelId ?? config?.testModelId,
     })
   }
 
@@ -1376,6 +1377,25 @@ export function Settings() {
                   </Select>
                   <p className="text-xs text-muted-foreground">
                     优先使用的 API 端点
+                  </p>
+                </div>
+
+                <div className="space-y-2">
+                  <Label htmlFor="testModelId">测试/验证模型 ID</Label>
+                  <Input
+                    id="testModelId"
+                    type="text"
+                    placeholder="claude-sonnet-4.5"
+                    value={localConfig.testModelId ?? config?.testModelId ?? "claude-sonnet-4.5"}
+                    onChange={(e) =>
+                      setLocalConfig({
+                        ...localConfig,
+                        testModelId: e.target.value,
+                      })
+                    }
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    账号连通性测试和 Token 刷新后验证使用的模型 ID
                   </p>
                 </div>
               </div>

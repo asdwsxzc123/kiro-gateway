@@ -7,7 +7,7 @@ import * as accountStore from '../storage/accountStore.js'
 import * as configStore from '../storage/configStore.js'
 import { createLogger } from '../utils/logger.js'
 import { refreshTokenByMethod, needsTokenRefresh, isTokenExpired } from '../core/tokenRefresh.js'
-import { fetchKiroModels, fetchUsageLimits, callKiroApiStream } from '../core/kiroApi.js'
+import { fetchUsageLimits, callKiroApiStream } from '../core/kiroApi.js'
 import { claudeToKiro } from '../core/translator.js'
 import { generateMachineId } from '../core/machineId.js'
 import type { ProxyAccount, AddAccountRequest, UpdateAccountRequest, ClaudeRequest } from '../core/types.js'
@@ -238,8 +238,10 @@ export async function testAccountConnection(id: string): Promise<{
   logger.info('Testing connection for account', { id })
 
   try {
-    // 直接使用默认模型，不请求模型列表（某些区域可能无法获取模型列表）
-    const selectedModel = { modelId: 'claude-sonnet-4.5', modelName: 'Claude Sonnet 4.5' }
+    // 从配置读取测试模型 ID
+    const gatewayConfig = await configStore.getGatewayConfig()
+    const testModelId = gatewayConfig.testModelId || 'claude-sonnet-4.5'
+    const selectedModel = { modelId: testModelId, modelName: testModelId }
 
     logger.info('Selected model for testing', { id, model: selectedModel.modelId })
 
@@ -339,17 +341,37 @@ export async function checkAndRefreshExpiredTokens(): Promise<{
         })
         logger.info('Token auto-refreshed', { id: account.id })
 
-        // 验证刷新后的账号可用性
-        const refreshedAccount = { ...account, accessToken: result.accessToken }
-        const { error: modelError } = await fetchKiroModels(refreshedAccount)
-        if (modelError) {
-          logger.error('Post-refresh model verification failed', { id: account.id, error: modelError })
-          await accountStore.updateAccount(account.id, { status: 'error_suspended', statusReason: `Token 刷新后验证失败: ${modelError}` })
+        // 验证刷新后的账号可用性（通过实际请求验证，而非模型列表）
+        const refreshedAccount: ProxyAccount = { ...account, accessToken: result.accessToken }
+        try {
+          const gwConfig = await configStore.getGatewayConfig()
+          const testReq: ClaudeRequest = {
+            model: gwConfig.testModelId || 'claude-sonnet-4.5',
+            max_tokens: 10,
+            messages: [{ role: 'user', content: DEFAULT_TEST_MESSAGE }]
+          }
+          const payload = claudeToKiro(testReq, refreshedAccount.profileArn)
+          await new Promise<void>((resolve, reject) => {
+            callKiroApiStream(
+              refreshedAccount,
+              payload,
+              () => {},
+              () => resolve(),
+              reject,
+              undefined,
+              undefined,
+              true // skipAgentMode
+            )
+          })
+        } catch (verifyError) {
+          const errorMsg = (verifyError as Error).message
+          logger.error('Post-refresh verification failed', { id: account.id, error: errorMsg })
+          await accountStore.updateAccount(account.id, { status: 'error_suspended', statusReason: `Token 刷新后验证失败: ${errorMsg}` })
           notify({
             type: 'account_error',
             timestamp: new Date().toISOString(),
             account: { id: account.id, alias: account.alias, email: account.email },
-            detail: { status: 'error_suspended', reason: 'ListAvailableModels failed after token refresh', error: modelError }
+            detail: { status: 'error_suspended', reason: 'Verification request failed after token refresh', error: errorMsg }
           }).catch(() => {})
           return false
         }

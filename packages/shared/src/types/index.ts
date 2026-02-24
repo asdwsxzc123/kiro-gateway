@@ -289,6 +289,9 @@ export interface GatewayConfig {
   queueEnabled?: boolean;            // 是否启用并发限制排队，默认 false（不限制）
   queueMaxSize?: number;             // 最大队列长度，默认 2x maxConcurrent
   queueTimeoutMs?: number;           // 排队超时时间（毫秒），默认 30000
+
+  // 测试配置
+  testModelId?: string;              // 账号验证/测试使用的模型 ID，默认 claude-sonnet-4.5
 }
 
 export interface UpdateConfigRequest {
@@ -352,6 +355,9 @@ export interface UpdateConfigRequest {
   queueEnabled?: boolean;
   queueMaxSize?: number;
   queueTimeoutMs?: number;
+
+  // 测试配置
+  testModelId?: string;
 }
 
 /**
