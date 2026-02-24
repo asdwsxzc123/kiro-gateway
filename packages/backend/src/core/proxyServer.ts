@@ -724,18 +724,18 @@ export class ProxyServer {
     this.events.onRequest?.({ path: '/v1/messages', method: 'POST' })
     const effectiveRequest = this.getEffectiveRequest(request)
 
-    // Debug: Log request structure
-    logger.info('Incoming Claude request', {
-      model: effectiveRequest.model,
-      hasSystem: !!effectiveRequest.system,
-      systemType: typeof effectiveRequest.system,
-      systemLength: typeof effectiveRequest.system === 'string' ? effectiveRequest.system.length : Array.isArray(effectiveRequest.system) ? effectiveRequest.system.length : 0,
-      hasTools: !!effectiveRequest.tools,
-      toolsCount: effectiveRequest.tools?.length || 0,
-      originalToolsCount: request.tools?.length || 0,
-      toolsDisabled: !!this.config.disableTools,
-      messageCount: effectiveRequest.messages.length
-    })
+    // Debug: Log request structure (disabled for performance)
+    // logger.info('Incoming Claude request', {
+    //   model: effectiveRequest.model,
+    //   hasSystem: !!effectiveRequest.system,
+    //   systemType: typeof effectiveRequest.system,
+    //   systemLength: typeof effectiveRequest.system === 'string' ? effectiveRequest.system.length : Array.isArray(effectiveRequest.system) ? effectiveRequest.system.length : 0,
+    //   hasTools: !!effectiveRequest.tools,
+    //   toolsCount: effectiveRequest.tools?.length || 0,
+    //   originalToolsCount: request.tools?.length || 0,
+    //   toolsDisabled: !!this.config.disableTools,
+    //   messageCount: effectiveRequest.messages.length
+    // })
 
     // 统一账号选择
     const sessionHash = computeSessionHash(effectiveRequest, _headers?.['x-session-id'])
@@ -776,24 +776,24 @@ export class ProxyServer {
       const cacheReadTokens = capBillingTokens(cacheCalc.cacheReadTokens, effectiveRequest.model)
       const totalInputTokens = uncachedInputTokens + cacheWriteTokens + cacheReadTokens
 
-      logger.info('=== INPUT TOKEN DEBUG (non-stream) ===', {
-        selfInputTokens,
-        userOnlyTokens,
-        skipBilling,
-        cacheRatio: {
-          cacheCreationWeight: cacheRatio.cacheCreationWeight,
-          cacheReadWeight: cacheRatio.cacheReadWeight,
-          uncachedWeight: cacheRatio.uncachedWeight,
-          totalWeight: cacheRatio.totalWeight
-        },
-        cacheCalc: {
-          uncachedTokens: cacheCalc.uncachedTokens,
-          cacheCreationTokens: cacheCalc.cacheCreationTokens,
-          cacheReadTokens: cacheCalc.cacheReadTokens
-        },
-        finalInputTokens: uncachedInputTokens,
-        finalTotal: totalInputTokens
-      })
+      // logger.info('=== INPUT TOKEN DEBUG (non-stream) ===', {
+      //   selfInputTokens,
+      //   userOnlyTokens,
+      //   skipBilling,
+      //   cacheRatio: {
+      //     cacheCreationWeight: cacheRatio.cacheCreationWeight,
+      //     cacheReadWeight: cacheRatio.cacheReadWeight,
+      //     uncachedWeight: cacheRatio.uncachedWeight,
+      //     totalWeight: cacheRatio.totalWeight
+      //   },
+      //   cacheCalc: {
+      //     uncachedTokens: cacheCalc.uncachedTokens,
+      //     cacheCreationTokens: cacheCalc.cacheCreationTokens,
+      //     cacheReadTokens: cacheCalc.cacheReadTokens
+      //   },
+      //   finalInputTokens: uncachedInputTokens,
+      //   finalTotal: totalInputTokens
+      // })
       // output tokens 由 kiroApi parseEventStream 自计算（tiktoken），限制不超过 200k
       const outputTokens = capBillingTokens(result.usage.outputTokens, effectiveRequest.model)
       const kiroCredits = result.usage.kiroCredits
@@ -1051,33 +1051,33 @@ export class ProxyServer {
         })
       }
 
-      // Debug: 关键排查日志
-      const debugCacheCalc = splitTokensByRatio(cacheRatio, estimatedTotalInputTokens)
-      logger.info('=== CACHE DEBUG (stream) ===', {
-        model: effectiveRequest.model,
-        hasSystem: !!effectiveRequest.system,
-        systemType: typeof effectiveRequest.system,
-        systemIsArray: Array.isArray(effectiveRequest.system),
-        systemArrayLen: Array.isArray(effectiveRequest.system) ? effectiveRequest.system.length : 0,
-        hasTools: !!effectiveRequest.tools,
-        toolsCount: effectiveRequest.tools?.length || 0,
-        originalToolsCount: request.tools?.length || 0,
-        toolsDisabled: !!this.config.disableTools,
-        messageCount: effectiveRequest.messages.length,
-        cacheRatio: {
-          cacheCreationWeight: cacheRatio.cacheCreationWeight,
-          cacheReadWeight: cacheRatio.cacheReadWeight,
-          uncachedWeight: cacheRatio.uncachedWeight,
-          totalWeight: cacheRatio.totalWeight
-        },
-        estimatedTotalInputTokens,
-        userOnlyTokens,
-        split: {
-          uncachedTokens: debugCacheCalc.uncachedTokens,
-          cacheCreationTokens: debugCacheCalc.cacheCreationTokens,
-          cacheReadTokens: debugCacheCalc.cacheReadTokens
-        }
-      })
+      // Debug: 关键排查日志（disabled for performance）
+      // const debugCacheCalc = splitTokensByRatio(cacheRatio, estimatedTotalInputTokens)
+      // logger.info('=== CACHE DEBUG (stream) ===', {
+      //   model: effectiveRequest.model,
+      //   hasSystem: !!effectiveRequest.system,
+      //   systemType: typeof effectiveRequest.system,
+      //   systemIsArray: Array.isArray(effectiveRequest.system),
+      //   systemArrayLen: Array.isArray(effectiveRequest.system) ? effectiveRequest.system.length : 0,
+      //   hasTools: !!effectiveRequest.tools,
+      //   toolsCount: effectiveRequest.tools?.length || 0,
+      //   originalToolsCount: request.tools?.length || 0,
+      //   toolsDisabled: !!this.config.disableTools,
+      //   messageCount: effectiveRequest.messages.length,
+      //   cacheRatio: {
+      //     cacheCreationWeight: cacheRatio.cacheCreationWeight,
+      //     cacheReadWeight: cacheRatio.cacheReadWeight,
+      //     uncachedWeight: cacheRatio.uncachedWeight,
+      //     totalWeight: cacheRatio.totalWeight
+      //   },
+      //   estimatedTotalInputTokens,
+      //   userOnlyTokens,
+      //   split: {
+      //     uncachedTokens: debugCacheCalc.uncachedTokens,
+      //     cacheCreationTokens: debugCacheCalc.cacheCreationTokens,
+      //     cacheReadTokens: debugCacheCalc.cacheReadTokens
+      //   }
+      // })
 
       await this.handleClaudeStream(
         callbacks,
@@ -1287,13 +1287,13 @@ export class ProxyServer {
 
     // 发送 message_start（仅首轮）
     if (currentRound === 0) {
-      logger.info('=== STREAM TOKEN DECISION (message_start) ===', {
-        userOnlyTokens,
-        estimatedCacheCalcUncached: estimatedCacheCalc?.uncachedTokens,
-        estimatedInputTokens,
-        chosen_input_tokens: userOnlyTokens ?? estimatedCacheCalc?.uncachedTokens ?? estimatedInputTokens,
-        source: userOnlyTokens != null ? 'userOnlyTokens' : estimatedCacheCalc ? 'cacheCalc.uncachedTokens' : 'estimatedInputTokens'
-      })
+      // logger.info('=== STREAM TOKEN DECISION (message_start) ===', {
+      //   userOnlyTokens,
+      //   estimatedCacheCalcUncached: estimatedCacheCalc?.uncachedTokens,
+      //   estimatedInputTokens,
+      //   chosen_input_tokens: userOnlyTokens ?? estimatedCacheCalc?.uncachedTokens ?? estimatedInputTokens,
+      //   source: userOnlyTokens != null ? 'userOnlyTokens' : estimatedCacheCalc ? 'cacheCalc.uncachedTokens' : 'estimatedInputTokens'
+      // })
       const messageStart = createClaudeStreamEvent('message_start', {
         message: {
           id,
@@ -1396,16 +1396,16 @@ export class ProxyServer {
           const uncachedInputTokens = capBillingTokens(userOnlyTokens ?? cacheCalc?.uncachedTokens ?? estimatedInputTokens, model)
           const totalInputTokens = uncachedInputTokens + cacheWriteTokens + cacheReadTokens
 
-          logger.info('=== STREAM TOKEN DECISION (completion) ===', {
-            userOnlyTokens,
-            cacheCalcUncachedTokens: cacheCalc?.uncachedTokens,
-            estimatedInputTokens,
-            uncachedInputTokens,
-            cacheWriteTokens,
-            cacheReadTokens,
-            totalInputTokens,
-            source: userOnlyTokens != null ? 'userOnlyTokens' : cacheCalc ? 'cacheCalc.uncachedTokens' : 'estimatedInputTokens'
-          })
+          // logger.info('=== STREAM TOKEN DECISION (completion) ===', {
+          //   userOnlyTokens,
+          //   cacheCalcUncachedTokens: cacheCalc?.uncachedTokens,
+          //   estimatedInputTokens,
+          //   uncachedInputTokens,
+          //   cacheWriteTokens,
+          //   cacheReadTokens,
+          //   totalInputTokens,
+          //   source: userOnlyTokens != null ? 'userOnlyTokens' : cacheCalc ? 'cacheCalc.uncachedTokens' : 'estimatedInputTokens'
+          // })
 
           // 辅助请求（主题检测、自动建议）：记录日志但跳过计费统计
           this.recordRequestSuccess()

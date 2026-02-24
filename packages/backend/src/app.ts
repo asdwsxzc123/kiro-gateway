@@ -8,8 +8,6 @@ import path from 'path'
 import { createLogger } from './utils/logger.js'
 import routes from './routes/index.js'
 import { jwtAuthMiddleware } from './middleware/jwtAuth.js'
-import { requestLoggerMiddleware } from './middleware/requestLogger.js'
-import { rateLimitMiddleware } from './middleware/rateLimit.js'
 import { notFoundHandler, errorHandler } from './middleware/errorHandler.js'
 import { initAdmin } from './storage/adminStore.js'
 
@@ -29,11 +27,11 @@ export async function createApp(): Promise<Express> {
   app.use(express.json({ limit: '50mb' }))
   app.use(express.urlencoded({ extended: true }))
 
-  // 请求日志
-  app.use(requestLoggerMiddleware)
+  // 请求日志（暂时关闭，排查性能问题）
+  // app.use(requestLoggerMiddleware)
 
   // 限流中间件
-  app.use(rateLimitMiddleware)
+  // app.use(rateLimitMiddleware)
 
   // Claude Code 遥测端点 - 直接返回 200 OK（无需认证）
   app.post('/api/event_logging/batch', (_req, res) => {
