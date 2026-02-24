@@ -431,8 +431,8 @@ export function Accounts() {
                       </span>
                     </TableCell>
                     <TableCell>
-                      <span className="text-xs font-mono text-muted-foreground" title={account.proxyUrl || ""}>
-                        {account.proxyUrl ? account.proxyUrl.replace(/\/\/[^@]*@/, "//***@").slice(0, 20) + (account.proxyUrl.length > 20 ? "..." : "") : "-"}
+                      <span className="text-xs font-mono text-muted-foreground" title={account.proxyUrl ? account.proxyUrl.replace(/\/\/[^@]*@/, "//") : ""}>
+                        {account.proxyUrl ? account.proxyUrl.replace(/\/\/[^@]*@/, "//") : "-"}
                       </span>
                     </TableCell>
                     <TableCell>

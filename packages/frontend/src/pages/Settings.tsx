@@ -700,101 +700,122 @@ export function Settings() {
               </div>
 
               {(localConfig.queueEnabled ?? config?.queueEnabled) && (
-                <>
-                <div className="grid gap-4 md:grid-cols-3">
-                  <div className="space-y-2">
-                    <Label htmlFor="maxConcurrent">最大并发数</Label>
-                    <Input
-                      id="maxConcurrent"
-                      type="number"
-                      value={localConfig.maxConcurrent ?? config?.maxConcurrent ?? 10}
-                      onChange={(e) =>
-                        setLocalConfig({
-                          ...localConfig,
-                          maxConcurrent: parseInt(e.target.value),
-                        })
-                      }
-                    />
-                    <p className="text-xs text-muted-foreground">
-                      同时处理的最大请求数
-                    </p>
+                <div className="space-y-4">
+                  {/* 基础并发配置 */}
+                  <div className="grid gap-4 md:grid-cols-3">
+                    <div className="space-y-2">
+                      <Label htmlFor="maxConcurrent">
+                        {(localConfig.concurrencyMultiplier ?? config?.concurrencyMultiplier ?? 0) > 0
+                          ? "最小并发数 (兜底)"
+                          : "最大并发数"}
+                      </Label>
+                      <Input
+                        id="maxConcurrent"
+                        type="number"
+                        value={localConfig.maxConcurrent ?? config?.maxConcurrent ?? 10}
+                        onChange={(e) =>
+                          setLocalConfig({
+                            ...localConfig,
+                            maxConcurrent: parseInt(e.target.value),
+                          })
+                        }
+                      />
+                      <p className="text-xs text-muted-foreground">
+                        {(localConfig.concurrencyMultiplier ?? config?.concurrencyMultiplier ?? 0) > 0
+                          ? "动态模式下作为最小保障值"
+                          : "同时处理的最大请求数"}
+                      </p>
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="queueMaxSize">
+                        {(localConfig.queueSizeMultiplier ?? config?.queueSizeMultiplier ?? 0) > 0
+                          ? "最小队列长度 (兜底)"
+                          : "最大队列长度"}
+                      </Label>
+                      <Input
+                        id="queueMaxSize"
+                        type="number"
+                        value={localConfig.queueMaxSize ?? config?.queueMaxSize ?? (localConfig.maxConcurrent ?? config?.maxConcurrent ?? 10) * 2}
+                        onChange={(e) =>
+                          setLocalConfig({
+                            ...localConfig,
+                            queueMaxSize: parseInt(e.target.value),
+                          })
+                        }
+                      />
+                      <p className="text-xs text-muted-foreground">
+                        超过队列长度的请求将直接拒绝
+                      </p>
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="queueTimeoutMs">排队超时 (ms)</Label>
+                      <Input
+                        id="queueTimeoutMs"
+                        type="number"
+                        value={localConfig.queueTimeoutMs ?? config?.queueTimeoutMs ?? 30000}
+                        onChange={(e) =>
+                          setLocalConfig({
+                            ...localConfig,
+                            queueTimeoutMs: parseInt(e.target.value),
+                          })
+                        }
+                      />
+                      <p className="text-xs text-muted-foreground">
+                        排队等待超过此时间将被拒绝
+                      </p>
+                    </div>
                   </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="queueMaxSize">最大队列长度</Label>
-                    <Input
-                      id="queueMaxSize"
-                      type="number"
-                      value={localConfig.queueMaxSize ?? config?.queueMaxSize ?? (localConfig.maxConcurrent ?? config?.maxConcurrent ?? 10) * 2}
-                      onChange={(e) =>
-                        setLocalConfig({
-                          ...localConfig,
-                          queueMaxSize: parseInt(e.target.value),
-                        })
-                      }
-                    />
-                    <p className="text-xs text-muted-foreground">
-                      超过队列长度的请求将直接拒绝
-                    </p>
-                  </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="queueTimeoutMs">排队超时 (ms)</Label>
-                    <Input
-                      id="queueTimeoutMs"
-                      type="number"
-                      value={localConfig.queueTimeoutMs ?? config?.queueTimeoutMs ?? 30000}
-                      onChange={(e) =>
-                        setLocalConfig({
-                          ...localConfig,
-                          queueTimeoutMs: parseInt(e.target.value),
-                        })
-                      }
-                    />
-                    <p className="text-xs text-muted-foreground">
-                      排队等待超过此时间将被拒绝
-                    </p>
+
+                  {/* 动态并发 */}
+                  <div className="rounded-md border p-4 space-y-3">
+                    <div className="space-y-0.5">
+                      <Label className="text-sm font-medium">动态并发 (可选)</Label>
+                      <p className="text-xs text-muted-foreground">
+                        根据可用账号数自动调整并发上限，乘数为 0 表示关闭，使用上方的固定值
+                      </p>
+                    </div>
+                    <div className="grid gap-4 md:grid-cols-2">
+                      <div className="space-y-2">
+                        <Label htmlFor="concurrencyMultiplier">并发乘数</Label>
+                        <Input
+                          id="concurrencyMultiplier"
+                          type="number"
+                          step="0.5"
+                          min="0"
+                          value={localConfig.concurrencyMultiplier ?? config?.concurrencyMultiplier ?? 0}
+                          onChange={(e) =>
+                            setLocalConfig({
+                              ...localConfig,
+                              concurrencyMultiplier: parseFloat(e.target.value) || 0,
+                            })
+                          }
+                        />
+                        <p className="text-xs text-muted-foreground">
+                          有效并发 = max(最小并发, 乘数 x 可用账号数)
+                        </p>
+                      </div>
+                      <div className="space-y-2">
+                        <Label htmlFor="queueSizeMultiplier">队列乘数</Label>
+                        <Input
+                          id="queueSizeMultiplier"
+                          type="number"
+                          step="0.5"
+                          min="0"
+                          value={localConfig.queueSizeMultiplier ?? config?.queueSizeMultiplier ?? 0}
+                          onChange={(e) =>
+                            setLocalConfig({
+                              ...localConfig,
+                              queueSizeMultiplier: parseFloat(e.target.value) || 0,
+                            })
+                          }
+                        />
+                        <p className="text-xs text-muted-foreground">
+                          有效队列 = max(最小队列, 乘数 x 可用账号数)
+                        </p>
+                      </div>
+                    </div>
                   </div>
                 </div>
-                <div className="grid gap-4 md:grid-cols-2">
-                  <div className="space-y-2">
-                    <Label htmlFor="concurrencyMultiplier">并发乘数</Label>
-                    <Input
-                      id="concurrencyMultiplier"
-                      type="number"
-                      step="0.5"
-                      min="0"
-                      value={localConfig.concurrencyMultiplier ?? config?.concurrencyMultiplier ?? 0}
-                      onChange={(e) =>
-                        setLocalConfig({
-                          ...localConfig,
-                          concurrencyMultiplier: parseFloat(e.target.value) || 0,
-                        })
-                      }
-                    />
-                    <p className="text-xs text-muted-foreground">
-                      动态模式: 有效并发 = max(最大并发, 乘数 x 可用账号数)，0 = 固定模式
-                    </p>
-                  </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="queueSizeMultiplier">队列乘数</Label>
-                    <Input
-                      id="queueSizeMultiplier"
-                      type="number"
-                      step="0.5"
-                      min="0"
-                      value={localConfig.queueSizeMultiplier ?? config?.queueSizeMultiplier ?? 0}
-                      onChange={(e) =>
-                        setLocalConfig({
-                          ...localConfig,
-                          queueSizeMultiplier: parseFloat(e.target.value) || 0,
-                        })
-                      }
-                    />
-                    <p className="text-xs text-muted-foreground">
-                      动态模式: 有效队列 = max(最大队列, 乘数 x 可用账号数)，0 = 固定模式
-                    </p>
-                  </div>
-                </div>
-                </>
               )}
 
               {/* 开关配置 */}
