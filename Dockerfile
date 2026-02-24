@@ -67,6 +67,7 @@ RUN corepack enable && corepack prepare pnpm@9.0.0 --activate
 
 # 设置环境变量
 ENV NODE_ENV=production
+ENV LOG_DIR=/app/logs
 
 # 复制 workspace 配置
 COPY pnpm-workspace.yaml package.json pnpm-lock.yaml ./
