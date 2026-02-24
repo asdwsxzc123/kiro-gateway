@@ -238,31 +238,8 @@ export async function testAccountConnection(id: string): Promise<{
   logger.info('Testing connection for account', { id })
 
   try {
-    // 先获取可用模型列表
-    const { models, error: modelError } = await fetchKiroModels(account)
-    if (modelError) {
-      // 网络或 HTTP 错误，标记账号为 error_suspended
-      await accountStore.updateAccount(id, { status: 'error_suspended', statusReason: `模型列表获取失败: ${modelError}` })
-      notify({
-        type: 'account_error',
-        timestamp: new Date().toISOString(),
-        account: { id, alias: account.alias, email: account.email },
-        detail: { status: 'error_suspended', reason: 'ListAvailableModels failed', error: modelError }
-      }).catch(() => {})
-      return { success: false, error: modelError }
-    }
-    if (models.length === 0) {
-      return { success: false, error: 'No available models' }
-    }
-
-    // 优先使用默认模型，如果不可用则使用第一个可用模型
-    let selectedModel = models.find(m =>
-      m.modelId.toLowerCase().includes('sonnet') &&
-      (m.modelId.includes('4-5') || m.modelId.includes('4.5'))
-    )
-    if (!selectedModel) {
-      selectedModel = models[0]
-    }
+    // 直接使用默认模型，不请求模型列表（某些区域可能无法获取模型列表）
+    const selectedModel = { modelId: 'claude-sonnet-4.5', modelName: 'Claude Sonnet 4.5' }
 
     logger.info('Selected model for testing', { id, model: selectedModel.modelId })
 

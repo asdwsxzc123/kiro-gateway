@@ -29,27 +29,22 @@ export function mapToApiRegion(ssoRegion?: string): string {
   return 'us-east-1'
 }
 
-// Kiro API 端点配置
-export function getKiroEndpoints(region: string = 'us-east-1') {
-  const apiRegion = mapToApiRegion(region)
-  return [
-    {
-      url: `https://codewhisperer.${apiRegion}.amazonaws.com/generateAssistantResponse`,
-      origin: 'AI_EDITOR',
-      amzTarget: 'AmazonCodeWhispererStreamingService.GenerateAssistantResponse',
-      name: 'CodeWhisperer'
-    },
-    {
-      url: `https://q.${apiRegion}.amazonaws.com/generateAssistantResponse`,
-      origin: 'CLI',
-      amzTarget: 'AmazonQDeveloperStreamingService.SendMessage',
-      name: 'AmazonQ'
-    }
-  ]
-}
-
-// 保留默认端点常量，兼容外部引用
-export const KIRO_ENDPOINTS = getKiroEndpoints()
+// Kiro Streaming API 端点配置（固定 us-east-1，与 kiro-m 保持一致）
+// 注意：streaming 端点不做区域映射，所有区域的账号都走 us-east-1
+export const KIRO_ENDPOINTS = [
+  {
+    url: 'https://codewhisperer.us-east-1.amazonaws.com/generateAssistantResponse',
+    origin: 'AI_EDITOR',
+    amzTarget: 'AmazonCodeWhispererStreamingService.GenerateAssistantResponse',
+    name: 'CodeWhisperer'
+  },
+  {
+    url: 'https://q.us-east-1.amazonaws.com/generateAssistantResponse',
+    origin: 'CLI',
+    amzTarget: 'AmazonQDeveloperStreamingService.SendMessage',
+    name: 'AmazonQ'
+  }
+]
 
 // Kiro 版本
 const KIRO_VERSION = '0.6.18'
@@ -467,11 +462,10 @@ function getAuthHeaders(account: ProxyAccount, endpoint: typeof KIRO_ENDPOINTS[0
 /**
  * 获取排序后的端点列表
  */
-function getSortedEndpoints(preferredEndpoint?: 'codewhisperer' | 'amazonq', region?: string): typeof KIRO_ENDPOINTS {
-  const endpoints = region ? getKiroEndpoints(region) : [...KIRO_ENDPOINTS]
-  if (!preferredEndpoint) return endpoints
+function getSortedEndpoints(preferredEndpoint?: 'codewhisperer' | 'amazonq'): typeof KIRO_ENDPOINTS {
+  if (!preferredEndpoint) return [...KIRO_ENDPOINTS]
 
-  const sorted = [...endpoints]
+  const sorted = [...KIRO_ENDPOINTS]
   const preferredName = preferredEndpoint === 'codewhisperer' ? 'CodeWhisperer' : 'AmazonQ'
 
   sorted.sort((a, b) => {
@@ -936,7 +930,7 @@ export async function callKiroApiStream(
   preferredEndpoint?: 'codewhisperer' | 'amazonq',
   skipAgentMode = false
 ): Promise<void> {
-  const endpoints = getSortedEndpoints(preferredEndpoint, account.region)
+  const endpoints = getSortedEndpoints(preferredEndpoint)
   let lastError: Error | null = null
 
   for (const endpoint of endpoints) {
