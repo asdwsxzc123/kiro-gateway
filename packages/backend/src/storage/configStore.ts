@@ -48,6 +48,10 @@ export interface GatewayConfig {
   rateLimitWindow: number
   rateLimitMax: number
 
+  // 并发排队配置
+  queueEnabled?: boolean
+  queueMaxSize?: number
+  queueTimeoutMs?: number
 }
 
 const DEFAULT_CONFIG: GatewayConfig = {
@@ -124,6 +128,10 @@ export async function getGatewayConfig(): Promise<GatewayConfig> {
       ...(data.autoStopErrorCodes && { autoStopErrorCodes: data.autoStopErrorCodes }),
       ...(data.autoStopErrorPatterns && { autoStopErrorPatterns: data.autoStopErrorPatterns }),
       ...(data.quotaUsageThreshold && { quotaUsageThreshold: parseInt(data.quotaUsageThreshold, 10) }),
+      // 并发排队配置
+      queueEnabled: data.queueEnabled === 'true',
+      ...(data.queueMaxSize && { queueMaxSize: parseInt(data.queueMaxSize, 10) }),
+      ...(data.queueTimeoutMs && { queueTimeoutMs: parseInt(data.queueTimeoutMs, 10) }),
     }
   } catch (error) {
     logger.error('Failed to get gateway config', { error: (error as Error).message })

@@ -285,6 +285,10 @@ export interface GatewayConfig {
   autoStopErrorPatterns?: string;    // 逗号分隔的错误消息匹配模式
   quotaUsageThreshold?: number;      // 配额使用阈值百分比 (0-100)，0 表示不限制
 
+  // 并发排队配置
+  queueEnabled?: boolean;            // 是否启用并发限制排队，默认 false（不限制）
+  queueMaxSize?: number;             // 最大队列长度，默认 2x maxConcurrent
+  queueTimeoutMs?: number;           // 排队超时时间（毫秒），默认 30000
 }
 
 export interface UpdateConfigRequest {
@@ -344,6 +348,10 @@ export interface UpdateConfigRequest {
   autoStopErrorPatterns?: string;
   quotaUsageThreshold?: number;
 
+  // 并发排队配置
+  queueEnabled?: boolean;
+  queueMaxSize?: number;
+  queueTimeoutMs?: number;
 }
 
 /**

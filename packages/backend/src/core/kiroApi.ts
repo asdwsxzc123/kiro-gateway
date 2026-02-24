@@ -20,17 +20,27 @@ import { countTokens } from './tokenCounter.js'
 
 const logger = createLogger('KiroAPI')
 
+// Kiro REST API 仅部署在 us-east-1 和 eu-central-1，需要将 SSO 区域映射到最近的 API 区域
+const SUPPORTED_API_REGIONS = ['us-east-1', 'eu-central-1'] as const
+export function mapToApiRegion(ssoRegion?: string): string {
+  if (!ssoRegion) return 'us-east-1'
+  if (SUPPORTED_API_REGIONS.includes(ssoRegion as typeof SUPPORTED_API_REGIONS[number])) return ssoRegion
+  if (ssoRegion.startsWith('eu-')) return 'eu-central-1'
+  return 'us-east-1'
+}
+
 // Kiro API 端点配置
 export function getKiroEndpoints(region: string = 'us-east-1') {
+  const apiRegion = mapToApiRegion(region)
   return [
     {
-      url: `https://codewhisperer.${region}.amazonaws.com/generateAssistantResponse`,
+      url: `https://codewhisperer.${apiRegion}.amazonaws.com/generateAssistantResponse`,
       origin: 'AI_EDITOR',
       amzTarget: 'AmazonCodeWhispererStreamingService.GenerateAssistantResponse',
       name: 'CodeWhisperer'
     },
     {
-      url: `https://q.${region}.amazonaws.com/generateAssistantResponse`,
+      url: `https://q.${apiRegion}.amazonaws.com/generateAssistantResponse`,
       origin: 'CLI',
       amzTarget: 'AmazonQDeveloperStreamingService.SendMessage',
       name: 'AmazonQ'
@@ -1050,8 +1060,8 @@ export async function fetchKiroModels(account: ProxyAccount): Promise<{
   models: { modelId: string; modelName: string; description: string }[]
   error?: string
 }> {
-  const region = account.region || 'us-east-1'
-  const url = `https://codewhisperer.${region}.amazonaws.com/ListAvailableModels?origin=AI_EDITOR&maxResults=50`
+  const apiRegion = mapToApiRegion(account.region)
+  const url = `https://codewhisperer.${apiRegion}.amazonaws.com/ListAvailableModels?origin=AI_EDITOR&maxResults=50`
   const machineId = account.machineId
 
   const headers: Record<string, string> = {
@@ -1169,8 +1179,8 @@ export async function fetchUsageLimits(account: ProxyAccount): Promise<UsageLimi
     params.set('profileArn', account.profileArn)
   }
 
-  const region = account.region || 'us-east-1'
-  const url = `https://q.${region}.amazonaws.com/getUsageLimits?${params.toString()}`
+  const apiRegion = mapToApiRegion(account.region)
+  const url = `https://q.${apiRegion}.amazonaws.com/getUsageLimits?${params.toString()}`
   const machineId = account.machineId
 
   const headers: Record<string, string> = {

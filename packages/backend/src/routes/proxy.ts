@@ -82,7 +82,10 @@ async function getProxyServer(): Promise<ProxyServer> {
       disableTools,
       autoSwitchOnQuotaExhausted: config.autoSwitchOnQuotaExhausted,
       errorCooldown429: config.errorCooldownTime ?? 60000,
-      thinkingOutputFormat: 'thinking'
+      thinkingOutputFormat: 'thinking',
+      queueEnabled: config.queueEnabled ?? false,
+      queueMaxSize: config.queueMaxSize,
+      queueTimeoutMs: config.queueTimeoutMs,
     })
 
     // 应用账号池配置
@@ -154,7 +157,10 @@ export async function updateProxyServerConfig(): Promise<void> {
     autoContinueRounds,
     disableTools,
     autoSwitchOnQuotaExhausted: config.autoSwitchOnQuotaExhausted,
-    errorCooldown429: config.errorCooldownTime ?? 60000
+    errorCooldown429: config.errorCooldownTime ?? 60000,
+    queueEnabled: config.queueEnabled ?? false,
+    queueMaxSize: config.queueMaxSize,
+    queueTimeoutMs: config.queueTimeoutMs,
   })
 
   proxyServer.updatePoolConfig({

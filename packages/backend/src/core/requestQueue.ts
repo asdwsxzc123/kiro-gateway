@@ -69,11 +69,8 @@ export class RequestQueue {
    * @param signal 可选的 AbortSignal，客户端断开时取消排队
    */
   async acquire(signal?: AbortSignal): Promise<() => void> {
-    // 不启用排队时，直接检查并发
+    // 不启用排队时，不做并发限制，仅计数
     if (!this.config.enabled) {
-      if (this.activeCount >= this.maxConcurrent) {
-        throw new Error('Too many concurrent requests')
-      }
       this.activeCount++
       return () => this.release()
     }
