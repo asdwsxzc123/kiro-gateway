@@ -1221,6 +1221,19 @@ export function Settings() {
                       />
                     </div>
 
+                    {/* 推送主题 */}
+                    <div className="space-y-1">
+                      <Label>推送主题</Label>
+                      <Input
+                        placeholder="Kiro Gateway"
+                        value={webhookConfig.subject ?? ""}
+                        onChange={(e) => setWebhookConfig({ ...webhookConfig, subject: e.target.value })}
+                      />
+                      <p className="text-xs text-muted-foreground">
+                        推送消息的标题前缀，不填则默认为 Kiro Gateway
+                      </p>
+                    </div>
+
                     {/* 通知类型 */}
                     <div className="grid gap-4 md:grid-cols-2">
                       <div className="flex items-center justify-between rounded-lg border p-3">

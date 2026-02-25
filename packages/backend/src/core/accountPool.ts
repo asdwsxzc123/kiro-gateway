@@ -452,22 +452,29 @@ export class AccountPool {
 
   /**
    * 如果指定账号可用则返回，否则返回 null（由调用方 fallback 到轮询）
-   * 检查条件：账号存在 + status=active + 不在 cooldown 期 + 不需要 refresh
+   * 检查条件：账号存在 + status=active + 不在 cooldown 期 + 不需要 refresh + 并发未满
+   * 返回 { account, reason } 以便调用方区分"账号不可用"和"仅并发满"
    */
-  getAccountIfAvailable(id: string): ProxyAccount | null {
+  getAccountIfAvailable(id: string): { account: ProxyAccount | null; reason?: 'concurrency_full' } {
     const account = this.accounts.get(id)
-    if (!account) return null
+    if (!account) return { account: null }
 
     const stats = this.accountStats.get(id)
-    if (!stats) return null
+    if (!stats) return { account: null }
 
-    if (!this.isActive(account)) return null
-    if (stats.needsRefresh) return null
+    if (!this.isActive(account)) return { account: null }
+    if (stats.needsRefresh) return { account: null }
 
     const now = Date.now()
-    if (account.cooldownUntil && account.cooldownUntil > now) return null
+    if (account.cooldownUntil && account.cooldownUntil > now) return { account: null }
 
-    return account
+    // 检查并发上限
+    const concurrency = this.activeConcurrency.get(id) || 0
+    if (account.maxConcurrency && account.maxConcurrency > 0 && concurrency >= account.maxConcurrency) {
+      return { account: null, reason: 'concurrency_full' }
+    }
+
+    return { account }
   }
 
   // ============ 并发追踪 ============

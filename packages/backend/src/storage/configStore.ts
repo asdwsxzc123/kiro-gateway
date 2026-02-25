@@ -411,7 +411,13 @@ export async function updateApiKey(
     // 合并更新字段
     if (updates.name !== undefined) record.name = updates.name
     if (updates.boundAccountIds !== undefined) record.boundAccountIds = updates.boundAccountIds
-    if (updates.quotaLimit !== undefined) record.quotaLimit = updates.quotaLimit
+    if (updates.quotaLimit !== undefined) {
+      if (updates.quotaLimit && updates.quotaLimit > 0) {
+        record.quotaLimit = updates.quotaLimit
+      } else {
+        delete record.quotaLimit
+      }
+    }
 
     await redis.hset(API_KEYS_KEY, id, JSON.stringify(record))
     logger.info('API key updated', { id, updates })
@@ -460,6 +466,7 @@ const WEBHOOK_CONFIG_KEY = 'webhook_config'
 
 const DEFAULT_WEBHOOK_CONFIG: WebhookConfig = {
   enabled: false,
+  subject: '',
   usageThreshold: 0,
   notifyOnAccountError: false,
   notifyOnTokenRefreshFail: false,

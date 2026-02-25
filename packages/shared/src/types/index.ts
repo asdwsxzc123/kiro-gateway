@@ -564,6 +564,7 @@ export interface WebhookPlatformConfig {
 
 export interface WebhookConfig {
   enabled: boolean;
+  subject?: string;
   usageThreshold: number;
   notifyOnAccountError: boolean;
   notifyOnTokenRefreshFail: boolean;
@@ -574,6 +575,7 @@ export interface WebhookConfig {
 export interface WebhookNotification {
   type: WebhookNotificationType;
   timestamp: string;
+  subject?: string;
   account?: { id: string; alias?: string; email?: string };
   detail: Record<string, unknown>;
 }

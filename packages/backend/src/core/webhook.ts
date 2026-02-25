@@ -30,6 +30,9 @@ export async function notify(notification: WebhookNotification): Promise<void> {
 
   if (!config.enabled) return
 
+  // 将主题附加到通知
+  notification.subject = config.subject
+
   // 检查通知类型开关
   if (notification.type === 'account_error' && !config.notifyOnAccountError) return
   if (notification.type === 'usage_alert' && !config.usageThreshold) return
@@ -63,6 +66,7 @@ export async function sendTestNotification(): Promise<WebhookDeliveryResult[]> {
   const notification: WebhookNotification = {
     type: 'test',
     timestamp: new Date().toISOString(),
+    subject: config.subject,
     detail: { message: 'Test notification from Kiro Gateway' },
   }
 
@@ -168,7 +172,8 @@ function buildTitle(n: WebhookNotification): string {
     request_stuck: '请求卡死告警',
     test: '测试通知',
   }
-  return `Kiro Gateway · ${map[n.type] || n.type}`
+  const prefix = n.subject || 'Kiro Gateway'
+  return `${prefix} · ${map[n.type] || n.type}`
 }
 
 function buildMarkdown(n: WebhookNotification): string {
