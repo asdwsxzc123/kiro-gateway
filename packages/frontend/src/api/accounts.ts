@@ -108,6 +108,19 @@ export async function batchImportAccounts(
 }
 
 /**
+ * 批量删除账号
+ * accountIds 为空时删除全部
+ */
+export async function batchDeleteAccounts(
+  accountIds?: string[]
+): Promise<{ deleted: number; total: number }> {
+  const response = await apiClient.post<
+    ApiResponse<{ deleted: number; total: number }>
+  >("/accounts/batch/delete", { accountIds })
+  return response.data.data!
+}
+
+/**
  * 批量获取所有账号使用量
  */
 export async function getAllAccountsUsage(): Promise<AccountUsage[]> {

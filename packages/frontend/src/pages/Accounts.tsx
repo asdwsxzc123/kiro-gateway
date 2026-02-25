@@ -1,6 +1,6 @@
 import { useState } from "react"
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
-import { Plus, Trash2, RefreshCw, TestTube, Pencil, BarChart3, Fingerprint, ArrowUpDown, Pause, Play, Download, Copy } from "lucide-react"
+import { Plus, Trash2, RefreshCw, TestTube, Pencil, BarChart3, Fingerprint, ArrowUpDown, Pause, Play, Download, Copy, XCircle } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import {
   Card,
@@ -28,6 +28,7 @@ import {
   regenerateMachineId,
   pauseAccount,
   resumeAccount,
+  batchDeleteAccounts,
 } from "@/api/accounts"
 import { getAllAccountsTodayCost, getConcurrencyStatus } from "@/api/stats"
 import type { Account, AccountUsage } from "@kiro-gateway/shared"
@@ -40,6 +41,7 @@ import { EditAccountDialog } from "@/components/accounts/EditAccountDialog"
  * 支持添加、删除、刷新 Token 等操作
  */
 export function Accounts() {
+  const defaultBatchImportConcurrency = 10
   const [isAddDialogOpen, setIsAddDialogOpen] = useState(false)
   const [isEditDialogOpen, setIsEditDialogOpen] = useState(false)
   const [editingAccount, setEditingAccount] = useState<Account | null>(null)
@@ -280,6 +282,36 @@ export function Accounts() {
     },
   })
 
+  // 批量删除账号
+  const batchDeleteMutation = useMutation({
+    mutationFn: batchDeleteAccounts,
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ["accounts"] })
+      toast({ title: "删除成功", description: `已删除 ${data.deleted} 个账号` })
+    },
+    onError: (error: Error) => {
+      toast({ title: "删除失败", description: error.message, variant: "destructive" })
+    },
+  })
+
+  /** 删除全部账号 */
+  const handleDeleteAll = () => {
+    if (!accounts?.length) return
+    if (!confirm(`确定要删除全部 ${accounts.length} 个账号吗？此操作不可恢复！`)) return
+    batchDeleteMutation.mutate(undefined)
+  }
+
+  /** 删除非激活账号 */
+  const handleDeleteInactive = () => {
+    const inactiveIds = accounts?.filter(a => a.status !== "active").map(a => a.id) || []
+    if (inactiveIds.length === 0) {
+      toast({ title: "无非激活账号", description: "所有账号均为激活状态" })
+      return
+    }
+    if (!confirm(`确定要删除 ${inactiveIds.length} 个非激活账号吗？`)) return
+    batchDeleteMutation.mutate(inactiveIds)
+  }
+
   /** 将账号列表转换为导出 JSON 格式 */
   const toExportFormat = (fullAccounts: Account[]) =>
     fullAccounts.map(a => ({
@@ -356,6 +388,18 @@ export function Accounts() {
         </div>
 
         <div className="flex gap-2">
+          {/* 删除非激活账号 */}
+          <Button variant="outline" onClick={handleDeleteInactive} disabled={batchDeleteMutation.isPending || !accounts?.length}>
+            <XCircle className="mr-2 h-4 w-4 text-yellow-600" />
+            删除非激活
+          </Button>
+
+          {/* 删除全部账号 */}
+          <Button variant="destructive" onClick={handleDeleteAll} disabled={batchDeleteMutation.isPending || !accounts?.length}>
+            <Trash2 className="mr-2 h-4 w-4" />
+            删除全部
+          </Button>
+
           {/* 复制账号按钮 */}
           <Button variant="outline" onClick={handleCopyAccounts} disabled={isCopying || !accounts?.length}>
             <Copy className="mr-2 h-4 w-4" />
@@ -377,7 +421,11 @@ export function Accounts() {
       </div>
 
       {/* 添加账号对话框 */}
-      <AddAccountDialog open={isAddDialogOpen} onOpenChange={setIsAddDialogOpen} />
+      <AddAccountDialog
+        open={isAddDialogOpen}
+        onOpenChange={setIsAddDialogOpen}
+        defaultBatchImportConcurrency={defaultBatchImportConcurrency}
+      />
 
       {/* 编辑账号对话框 */}
       <EditAccountDialog
