@@ -296,6 +296,12 @@ export interface GatewayConfig {
   concurrencyMultiplier?: number;    // 动态并发乘数，>0 时启用：有效并发 = max(maxConcurrent, 乘数 x 可用账号数)
   queueSizeMultiplier?: number;      // 动态队列乘数，>0 时启用：有效队列 = max(queueMaxSize, 乘数 x 可用账号数)
 
+  // Session 粘性配置
+  sessionEnabled?: boolean;                    // 是否启用 session 粘性，默认 true
+  sessionTtlSeconds?: number;                  // session 映射过期时间（秒），默认 3600
+  sessionRenewalThresholdSeconds?: number;     // 续期阈值（秒），默认 300
+  sessionEnableCacheControl?: boolean;         // 支持 cache_control 标记，默认 true
+
   // 测试配置
   testModelId?: string;              // 账号验证/测试使用的模型 ID，默认 claude-sonnet-4.5
 }
@@ -365,6 +371,12 @@ export interface UpdateConfigRequest {
   // 动态并发配置
   concurrencyMultiplier?: number;
   queueSizeMultiplier?: number;
+
+  // Session 粘性配置
+  sessionEnabled?: boolean;
+  sessionTtlSeconds?: number;
+  sessionRenewalThresholdSeconds?: number;
+  sessionEnableCacheControl?: boolean;
 
   // 测试配置
   testModelId?: string;

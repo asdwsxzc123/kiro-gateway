@@ -1,6 +1,6 @@
 import { useState } from "react"
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
-import { Plus, Trash2, RefreshCw, TestTube, Pencil, BarChart3, Fingerprint, ArrowUpDown, Pause, Play, Download } from "lucide-react"
+import { Plus, Trash2, RefreshCw, TestTube, Pencil, BarChart3, Fingerprint, ArrowUpDown, Pause, Play, Download, Copy } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import {
   Card,
@@ -280,10 +280,19 @@ export function Accounts() {
     },
   })
 
-  /**
-   * 导出所有账号为 OIDC 格式
-   * 格式: accessToken----refreshToken----clientId----clientSecret----region
-   */
+  /** 将账号列表转换为导出 JSON 格式 */
+  const toExportFormat = (fullAccounts: Account[]) =>
+    fullAccounts.map(a => ({
+      refreshToken: a.refreshToken || "",
+      clientId: a.clientId || "",
+      clientSecret: a.clientSecret || "",
+      region: a.region || "us-east-1",
+      startUrl: "",
+      provider: a.provider || "",
+      machineId: a.machineId || "",
+    }))
+
+  /** 导出所有账号为 JSON 文件 */
   const [isExporting, setIsExporting] = useState(false)
   const handleExportAccounts = async () => {
     if (!accounts || accounts.length === 0) {
@@ -292,17 +301,13 @@ export function Accounts() {
     }
     setIsExporting(true)
     try {
-      const fullAccounts = await Promise.all(
-        accounts.map(a => getAccount(a.id))
-      )
-      const lines = fullAccounts.map(a =>
-        [a.accessToken || "", a.refreshToken || "", a.clientId || "", a.clientSecret || "", a.region || "us-east-1"].join("----")
-      )
-      const blob = new Blob([lines.join("\n")], { type: "text/plain" })
+      const fullAccounts = await Promise.all(accounts.map(a => getAccount(a.id)))
+      const json = JSON.stringify(toExportFormat(fullAccounts), null, 2)
+      const blob = new Blob([json], { type: "application/json" })
       const url = URL.createObjectURL(blob)
       const link = document.createElement("a")
       link.href = url
-      link.download = `accounts_export_${new Date().toISOString().slice(0, 10)}.txt`
+      link.download = `accounts_export_${new Date().toISOString().slice(0, 10)}.json`
       link.click()
       URL.revokeObjectURL(url)
       toast({ title: "导出成功", description: `已导出 ${fullAccounts.length} 个账号` })
@@ -310,6 +315,26 @@ export function Accounts() {
       toast({ title: "导出失败", description: (error as Error).message, variant: "destructive" })
     } finally {
       setIsExporting(false)
+    }
+  }
+
+  /** 复制所有账号信息到剪贴板 */
+  const [isCopying, setIsCopying] = useState(false)
+  const handleCopyAccounts = async () => {
+    if (!accounts || accounts.length === 0) {
+      toast({ title: "无可复制账号", variant: "destructive" })
+      return
+    }
+    setIsCopying(true)
+    try {
+      const fullAccounts = await Promise.all(accounts.map(a => getAccount(a.id)))
+      const json = JSON.stringify(toExportFormat(fullAccounts), null, 2)
+      await navigator.clipboard.writeText(json)
+      toast({ title: "复制成功", description: `已复制 ${fullAccounts.length} 个账号信息` })
+    } catch (error) {
+      toast({ title: "复制失败", description: (error as Error).message, variant: "destructive" })
+    } finally {
+      setIsCopying(false)
     }
   }
 
@@ -331,6 +356,12 @@ export function Accounts() {
         </div>
 
         <div className="flex gap-2">
+          {/* 复制账号按钮 */}
+          <Button variant="outline" onClick={handleCopyAccounts} disabled={isCopying || !accounts?.length}>
+            <Copy className="mr-2 h-4 w-4" />
+            {isCopying ? "复制中..." : "复制账号"}
+          </Button>
+
           {/* 导出账号按钮 */}
           <Button variant="outline" onClick={handleExportAccounts} disabled={isExporting || !accounts?.length}>
             <Download className="mr-2 h-4 w-4" />
@@ -512,6 +543,23 @@ export function Accounts() {
                             <Play className="h-4 w-4 text-green-600" />
                           </Button>
                         )}
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          onClick={async () => {
+                            try {
+                              const full = await getAccount(account.id)
+                              const json = JSON.stringify(toExportFormat([full]), null, 2)
+                              await navigator.clipboard.writeText(json)
+                              toast({ title: "复制成功", description: `已复制 ${account.email || account.id.slice(0, 12)} 的账号信息` })
+                            } catch (error) {
+                              toast({ title: "复制失败", description: (error as Error).message, variant: "destructive" })
+                            }
+                          }}
+                          title="复制账号信息"
+                        >
+                          <Copy className="h-4 w-4" />
+                        </Button>
                         <Button
                           variant="ghost"
                           size="icon"

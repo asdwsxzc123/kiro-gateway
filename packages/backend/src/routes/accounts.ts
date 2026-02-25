@@ -102,12 +102,34 @@ router.post('/batch/resume', async (req: Request, res: Response) => {
 /**
  * 批量导入账号
  * POST /api/accounts/batch/import
+ * 支持两种 body 格式:
+ *   1. { accounts: AddAccountRequest[] }
+ *   2. 直接传入导出格式的 JSON 数组 (含 refreshToken/clientId/clientSecret/region/provider/machineId 等)
  */
 router.post('/batch/import', async (req: Request, res: Response) => {
   try {
-    const accounts = req.body.accounts as AddAccountRequest[]
+    let accounts: AddAccountRequest[]
 
-    if (!accounts || !Array.isArray(accounts)) {
+    if (Array.isArray(req.body)) {
+      // 直接传入数组（导出格式）
+      accounts = (req.body as Record<string, unknown>[]).map(item => ({
+        accessToken: (item.accessToken as string) || '',
+        refreshToken: (item.refreshToken as string) || undefined,
+        clientId: (item.clientId as string) || undefined,
+        clientSecret: (item.clientSecret as string) || undefined,
+        region: (item.region as string) || 'us-east-1',
+        authMethod: (item.startUrl ? 'idc' : (item.authMethod as 'social' | 'idc')) || 'idc',
+        provider: (item.provider as string) || 'Enterprise',
+        machineId: (item.machineId as string) || undefined,
+        email: (item.email as string) || undefined,
+        alias: (item.alias as string) || undefined,
+        proxyUrl: (item.proxyUrl as string) || undefined,
+      }))
+    } else {
+      accounts = req.body.accounts as AddAccountRequest[]
+    }
+
+    if (!accounts || !Array.isArray(accounts) || accounts.length === 0) {
       res.status(400).json({
         success: false,
         error: { message: 'accounts array is required' }
