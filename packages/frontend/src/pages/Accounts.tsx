@@ -370,6 +370,45 @@ export function Accounts() {
     }
   }
 
+  /** 批量刷新所有账号 Token */
+  const [batchRefreshProgress, setBatchRefreshProgress] = useState<{ total: number; done: number; success: number; failed: number } | null>(null)
+  const handleBatchRefresh = async () => {
+    const allAccounts = accounts || []
+    if (allAccounts.length === 0) {
+      toast({ title: "无可刷新账号", variant: "destructive" })
+      return
+    }
+    if (!confirm(`确定要批量刷新全部 ${allAccounts.length} 个账号的 Token 吗？`)) return
+
+    const progress = { total: allAccounts.length, done: 0, success: 0, failed: 0 }
+    const failedList: string[] = []
+    setBatchRefreshProgress({ ...progress })
+
+    const concurrency = defaultBatchImportConcurrency
+    const queue = [...allAccounts]
+    const run = async () => {
+      while (queue.length > 0) {
+        const account = queue.shift()!
+        try {
+          await refreshAccountToken(account.id)
+          progress.success++
+        } catch {
+          progress.failed++
+          failedList.push(account.email || account.id.slice(0, 12))
+        }
+        progress.done++
+        setBatchRefreshProgress({ ...progress })
+      }
+    }
+    await Promise.all(Array.from({ length: Math.min(concurrency, queue.length) }, () => run()))
+    queryClient.invalidateQueries({ queryKey: ["accounts"] })
+    const desc = failedList.length > 0
+      ? `成功 ${progress.success}，失败 ${progress.failed}\n失败账号: ${failedList.join(", ")}`
+      : `全部 ${progress.total} 个账号刷新成功`
+    toast({ title: "批量刷新完成", description: desc, variant: failedList.length > 0 ? "destructive" : undefined })
+    setBatchRefreshProgress(null)
+  }
+
   /** 批量测试所有激活账号 */
   const [batchTestProgress, setBatchTestProgress] = useState<{ total: number; done: number; success: number; failed: number } | null>(null)
   const handleBatchTest = async () => {
@@ -428,6 +467,12 @@ export function Accounts() {
         </div>
 
         <div className="flex gap-2">
+          {/* 批量刷新 Token */}
+          <Button variant="outline" onClick={handleBatchRefresh} disabled={!!batchRefreshProgress || !accounts?.length}>
+            <RefreshCw className="mr-2 h-4 w-4" />
+            {batchRefreshProgress ? `刷新中 ${batchRefreshProgress.done}/${batchRefreshProgress.total}` : "批量刷新"}
+          </Button>
+
           {/* 批量测试 */}
           <Button variant="outline" onClick={handleBatchTest} disabled={!!batchTestProgress || !accounts?.length}>
             <FlaskConical className="mr-2 h-4 w-4" />
