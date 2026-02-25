@@ -87,9 +87,14 @@ const initialManualForm: AddAccountRequest = {
 interface AddAccountDialogProps {
   open: boolean
   onOpenChange: (open: boolean) => void
+  defaultBatchImportConcurrency?: number
 }
 
-export function AddAccountDialog({ open, onOpenChange }: AddAccountDialogProps) {
+export function AddAccountDialog({
+  open,
+  onOpenChange,
+  defaultBatchImportConcurrency = 10,
+}: AddAccountDialogProps) {
   const [importMode, setImportMode] = useState<ImportMode>("oidc")
   const [oidcForm, setOidcForm] = useState<OidcFormData>(initialOidcForm)
   const [ssoForm, setSsoForm] = useState<SsoFormData>(initialSsoForm)
@@ -98,16 +103,19 @@ export function AddAccountDialog({ open, onOpenChange }: AddAccountDialogProps) 
 
   const { toast } = useToast()
   const queryClient = useQueryClient()
+  const resetForms = () => {
+    setOidcForm(initialOidcForm)
+    setOidcBatchInput("")
+    setSsoForm(initialSsoForm)
+    setManualForm(initialManualForm)
+  }
 
   const addMutation = useMutation({
     mutationFn: addAccount,
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["accounts"] })
       onOpenChange(false)
-      setOidcForm(initialOidcForm)
-      setOidcBatchInput("")
-      setSsoForm(initialSsoForm)
-      setManualForm(initialManualForm)
+      resetForms()
       toast({ title: "添加成功", description: "账号已成功添加" })
     },
     onError: (error: Error) => {
@@ -118,6 +126,49 @@ export function AddAccountDialog({ open, onOpenChange }: AddAccountDialogProps) 
       })
     },
   })
+
+  const runBatchImport = async (requests: AddAccountRequest[]) => {
+    if (requests.length === 0) return
+
+    const concurrency = Math.max(1, defaultBatchImportConcurrency)
+    const workerCount = Math.min(concurrency, requests.length)
+    let nextIndex = 0
+    let success = 0
+    const errors: string[] = []
+
+    const worker = async () => {
+      while (true) {
+        const currentIndex = nextIndex++
+        if (currentIndex >= requests.length) return
+        try {
+          await addAccount(requests[currentIndex])
+          success += 1
+        } catch (error) {
+          const message = error instanceof Error ? error.message : "未知错误"
+          errors.push(`第 ${currentIndex + 1} 条失败: ${message}`)
+        }
+      }
+    }
+
+    await Promise.all(Array.from({ length: workerCount }, () => worker()))
+    queryClient.invalidateQueries({ queryKey: ["accounts"] })
+
+    if (errors.length === 0) {
+      onOpenChange(false)
+      resetForms()
+      toast({
+        title: "批量导入完成",
+        description: `成功导入 ${success} 个账号（并发 ${workerCount}）`,
+      })
+      return
+    }
+
+    toast({
+      title: success > 0 ? "批量导入部分完成" : "批量导入失败",
+      description: `成功 ${success}，失败 ${errors.length}`,
+      variant: "destructive",
+    })
+  }
 
   /**
    * 解析 OIDC 批量粘贴的单行数据
@@ -134,6 +185,7 @@ export function AddAccountDialog({ open, onOpenChange }: AddAccountDialogProps) 
       region: parts[4] || "us-east-1",
       authMethod: "idc",
       provider: "Enterprise",
+      maxConcurrency: defaultBatchImportConcurrency,
     }
   }
 
@@ -170,6 +222,7 @@ export function AddAccountDialog({ open, onOpenChange }: AddAccountDialogProps) 
         machineId: (item.machineId as string) || undefined,
         email: (item.email as string) || undefined,
         proxyUrl: (item.proxyUrl as string) || undefined,
+        maxConcurrency: item.maxConcurrency != null ? Number(item.maxConcurrency) : defaultBatchImportConcurrency,
       }))
     } catch {
       return null
@@ -282,13 +335,7 @@ export function AddAccountDialog({ open, onOpenChange }: AddAccountDialogProps) 
       // 优先尝试 JSON 格式批量导入（仅多条时走批量路径）
       const jsonAccounts = parseJsonAccounts(oidcBatchInput)
       if (jsonAccounts && jsonAccounts.length > 1) {
-        for (const account of jsonAccounts) {
-          addMutation.mutate(account)
-        }
-        toast({
-          title: "批量导入中",
-          description: `正在导入 ${jsonAccounts.length} 个 JSON 格式账号`,
-        })
+        await runBatchImport(jsonAccounts)
         return
       }
 
@@ -300,22 +347,24 @@ export function AddAccountDialog({ open, onOpenChange }: AddAccountDialogProps) 
 
       if (batchLines.length > 1) {
         // 多行批量导入
-        let hasError = false
+        const batchRequests: AddAccountRequest[] = []
+        let hasParseError = false
         for (const line of batchLines) {
           const parsed = parseOidcBatchLine(line)
           if (parsed) {
-            addMutation.mutate(parsed)
+            batchRequests.push(parsed)
           } else {
-            hasError = true
+            hasParseError = true
           }
         }
-        if (hasError) {
+        if (hasParseError) {
           toast({
             title: "部分解析失败",
             description: "存在格式不正确的行，已跳过",
             variant: "destructive",
           })
         }
+        await runBatchImport(batchRequests)
         return
       }
 
@@ -336,6 +385,7 @@ export function AddAccountDialog({ open, onOpenChange }: AddAccountDialogProps) 
         region: oidcForm.region || "us-east-1",
         email: oidcForm.email || undefined,
         alias: oidcForm.alias || undefined,
+        maxConcurrency: defaultBatchImportConcurrency,
       }
       addMutation.mutate(request)
     } else if (importMode === "sso") {
@@ -357,15 +407,14 @@ export function AddAccountDialog({ open, onOpenChange }: AddAccountDialogProps) 
       }
 
       // 批量添加账号
-      for (const token of tokens) {
-        const request: AddAccountRequest = {
+      const requests: AddAccountRequest[] = tokens.map((token) => ({
           accessToken: token,
           authMethod: "social",
           region: ssoForm.region,
           alias: ssoForm.alias || undefined,
-        }
-        addMutation.mutate(request)
-      }
+          maxConcurrency: defaultBatchImportConcurrency,
+        }))
+      await runBatchImport(requests)
     } else {
       // 手动输入模式
       const error = validateManualForm()

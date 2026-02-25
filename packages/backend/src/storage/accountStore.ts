@@ -165,6 +165,7 @@ export async function addAccount(request: AddAccountRequest): Promise<ProxyAccou
     proxyUrl: request.proxyUrl,
     machineId,
     machineIdCreatedAt: now,
+    maxConcurrency: request.maxConcurrency,
     status: 'active',
     errorCount: 0,
     requestCount: 0,

@@ -100,6 +100,46 @@ router.post('/batch/resume', async (req: Request, res: Response) => {
 })
 
 /**
+ * 批量删除账号
+ * POST /api/accounts/batch/delete
+ * body: { accountIds: string[] }  — 为空时删除全部
+ */
+router.post('/batch/delete', async (req: Request, res: Response) => {
+  try {
+    const { accountIds } = req.body as { accountIds?: string[] }
+
+    let idsToDelete: string[]
+
+    if (accountIds && Array.isArray(accountIds) && accountIds.length > 0) {
+      idsToDelete = accountIds
+    } else {
+      // 未指定则删除全部
+      const all = await accountService.getAllAccounts()
+      idsToDelete = all.map(a => a.id)
+    }
+
+    let deleted = 0
+    for (const id of idsToDelete) {
+      const ok = await accountService.deleteAccount(id)
+      if (ok) deleted++
+    }
+
+    await refreshProxyServerAccounts()
+
+    res.json({
+      success: true,
+      data: { deleted, total: idsToDelete.length }
+    } as ApiResponse)
+  } catch (error) {
+    logger.error('Failed to batch delete accounts', { error: (error as Error).message })
+    res.status(500).json({
+      success: false,
+      error: { message: (error as Error).message }
+    } as ApiResponse)
+  }
+})
+
+/**
  * 批量导入账号
  * POST /api/accounts/batch/import
  * 支持两种 body 格式:
@@ -124,6 +164,7 @@ router.post('/batch/import', async (req: Request, res: Response) => {
         email: (item.email as string) || undefined,
         alias: (item.alias as string) || undefined,
         proxyUrl: (item.proxyUrl as string) || undefined,
+        maxConcurrency: item.maxConcurrency != null ? Number(item.maxConcurrency) : undefined,
       }))
     } else {
       accounts = req.body.accounts as AddAccountRequest[]
