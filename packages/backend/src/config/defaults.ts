@@ -21,7 +21,7 @@ export const DEFAULT_REDIS_CONFIG = {
 // 代理默认配置
 export const DEFAULT_PROXY_CONFIG = {
   enableMultiAccount: true,
-  maxConcurrent: 10,
+  maxConcurrent: 8,
   maxRetries: 3,
   retryDelayMs: 1000,
   tokenRefreshBeforeExpiry: 300, // 5分钟提前刷新

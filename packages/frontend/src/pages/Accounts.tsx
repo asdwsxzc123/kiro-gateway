@@ -1,6 +1,6 @@
 import { useState } from "react"
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
-import { Plus, Trash2, RefreshCw, TestTube, Pencil, BarChart3, Fingerprint, ArrowUpDown, Pause, Play, Download, Copy, XCircle } from "lucide-react"
+import { Plus, Trash2, RefreshCw, TestTube, Pencil, BarChart3, Fingerprint, ArrowUpDown, Pause, Play, Download, Copy, XCircle, FlaskConical } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import {
   Card,
@@ -41,7 +41,7 @@ import { EditAccountDialog } from "@/components/accounts/EditAccountDialog"
  * 支持添加、删除、刷新 Token 等操作
  */
 export function Accounts() {
-  const defaultBatchImportConcurrency = 10
+  const defaultBatchImportConcurrency = 8
   const [isAddDialogOpen, setIsAddDialogOpen] = useState(false)
   const [isEditDialogOpen, setIsEditDialogOpen] = useState(false)
   const [editingAccount, setEditingAccount] = useState<Account | null>(null)
@@ -370,6 +370,46 @@ export function Accounts() {
     }
   }
 
+  /** 批量测试所有激活账号 */
+  const [batchTestProgress, setBatchTestProgress] = useState<{ total: number; done: number; success: number; failed: number } | null>(null)
+  const handleBatchTest = async () => {
+    const allAccounts = accounts || []
+    if (allAccounts.length === 0) {
+      toast({ title: "无可测试账号", variant: "destructive" })
+      return
+    }
+    if (!confirm(`确定要批量测试全部 ${allAccounts.length} 个账号吗？`)) return
+
+    const progress = { total: allAccounts.length, done: 0, success: 0, failed: 0 }
+    const failedList: string[] = []
+    setBatchTestProgress({ ...progress })
+
+    // 并发控制：最多 5 个同时测试
+    const concurrency = 5
+    const queue = [...allAccounts]
+    const run = async () => {
+      while (queue.length > 0) {
+        const account = queue.shift()!
+        try {
+          await testAccount(account.id)
+          progress.success++
+        } catch {
+          progress.failed++
+          failedList.push(account.email || account.id.slice(0, 12))
+        }
+        progress.done++
+        setBatchTestProgress({ ...progress })
+      }
+    }
+    await Promise.all(Array.from({ length: Math.min(concurrency, queue.length) }, () => run()))
+    queryClient.invalidateQueries({ queryKey: ["accounts"] })
+    const desc = failedList.length > 0
+      ? `成功 ${progress.success}，失败 ${progress.failed}\n失败账号: ${failedList.join(", ")}`
+      : `全部 ${progress.total} 个账号测试通过`
+    toast({ title: "批量测试完成", description: desc, variant: failedList.length > 0 ? "destructive" : undefined })
+    setBatchTestProgress(null)
+  }
+
   /** 打开编辑对话框 */
   const handleOpenEditDialog = (account: Account) => {
     setEditingAccount(account)
@@ -388,6 +428,12 @@ export function Accounts() {
         </div>
 
         <div className="flex gap-2">
+          {/* 批量测试 */}
+          <Button variant="outline" onClick={handleBatchTest} disabled={!!batchTestProgress || !accounts?.length}>
+            <FlaskConical className="mr-2 h-4 w-4" />
+            {batchTestProgress ? `测试中 ${batchTestProgress.done}/${batchTestProgress.total}` : "批量测试"}
+          </Button>
+
           {/* 删除非激活账号 */}
           <Button variant="outline" onClick={handleDeleteInactive} disabled={batchDeleteMutation.isPending || !accounts?.length}>
             <XCircle className="mr-2 h-4 w-4 text-yellow-600" />

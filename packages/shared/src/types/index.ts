@@ -391,6 +391,7 @@ export interface ApiKeyRecord {
   name: string;
   keyPreview?: string;
   boundAccountIds?: string[];  // 绑定的账号 ID 列表
+  quotaLimit?: number;  // 费用上限（美元），0 或 undefined 表示不限制
   createdAt: number;
   lastUsed?: number;
 }

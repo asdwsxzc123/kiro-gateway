@@ -216,7 +216,7 @@ function extractClaudeContent(msg: ClaudeMessage): { content: string; images: Ki
         content += block.text
       } else if (block.type === 'image' && block.source) {
         images.push({
-          format: block.source.media_type.split('/')[1] || 'png',
+          format: block.source.media_type?.split('/')[1] || 'png',
           source: { bytes: block.source.data }
         })
       } else if (block.type === 'tool_result' && block.tool_use_id) {

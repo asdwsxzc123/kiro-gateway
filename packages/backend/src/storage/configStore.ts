@@ -66,7 +66,7 @@ const DEFAULT_CONFIG: GatewayConfig = {
   port: 3000,
   host: '0.0.0.0',
   enableMultiAccount: true,
-  maxConcurrent: 5,
+  maxConcurrent: 8,
   maxRetries: 3,
   retryDelay: 1000,
   requestTimeout: 120000,
@@ -266,6 +266,7 @@ export interface ApiKeyRecord {
   key: string
   name: string
   boundAccountIds?: string[]  // 绑定的账号 ID 列表（空或不设 = 使用全局账号池）
+  quotaLimit?: number  // 费用上限（美元），0 或 undefined 表示不限制
   createdAt: number
   lastUsed?: number
 }
@@ -398,7 +399,7 @@ export async function validateApiKey(key: string): Promise<ApiKeyRecord | null> 
  */
 export async function updateApiKey(
   id: string,
-  updates: Partial<Pick<ApiKeyRecord, 'name' | 'boundAccountIds'>>
+  updates: Partial<Pick<ApiKeyRecord, 'name' | 'boundAccountIds' | 'quotaLimit'>>
 ): Promise<ApiKeyRecord | null> {
   const redis = getRedisClient()
 
@@ -410,6 +411,7 @@ export async function updateApiKey(
     // 合并更新字段
     if (updates.name !== undefined) record.name = updates.name
     if (updates.boundAccountIds !== undefined) record.boundAccountIds = updates.boundAccountIds
+    if (updates.quotaLimit !== undefined) record.quotaLimit = updates.quotaLimit
 
     await redis.hset(API_KEYS_KEY, id, JSON.stringify(record))
     logger.info('API key updated', { id, updates })

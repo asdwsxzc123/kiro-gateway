@@ -76,7 +76,7 @@ const DEFAULT_CONFIG: ProxyConfig = {
   enableMultiAccount: true,
   selectedAccountIds: [],
   logRequests: true,
-  maxConcurrent: 5,
+  maxConcurrent: 8,
   maxRetries: 3,
   retryDelayMs: 1000,
   tokenRefreshBeforeExpiry: 300,
@@ -148,27 +148,20 @@ export class ProxyServer {
 
   updateConfig(updates: Partial<ProxyConfig>): void {
     this.config = { ...this.config, ...updates }
-    // 如果启用了动态并发乘数，使用动态计算；否则使用固定值
-    if (this.config.concurrencyMultiplier && this.config.concurrencyMultiplier > 0) {
-      this.recalculateDynamicConcurrency()
-    } else {
-      this.requestQueue.updateConfig(this.config.maxConcurrent, {
-        enabled: this.config.queueEnabled,
-        maxSize: this.config.queueMaxSize,
-        timeoutMs: this.config.queueTimeoutMs
-      })
-    }
+    // 始终基于可用账号数动态计算并发上限
+    this.recalculateDynamicConcurrency()
     logger.info('Config updated', { updates })
   }
 
   /**
    * 动态重新计算并发上限
-   * effectiveMax = max(maxConcurrent, floor(multiplier * availableCount))
-   * effectiveQueue = max(queueMaxSize, floor(queueMultiplier * availableCount))
+   * 默认：effectiveMax = max(maxConcurrent, 10 * availableCount)
+   * 配置乘数时：effectiveMax = max(maxConcurrent, floor(multiplier * availableCount))
    */
   recalculateDynamicConcurrency(): void {
-    const multiplier = this.config.concurrencyMultiplier
-    if (!multiplier || multiplier <= 0) return
+    const multiplier = this.config.concurrencyMultiplier && this.config.concurrencyMultiplier > 0
+      ? this.config.concurrencyMultiplier
+      : 10  // 默认每账号 10 并发
 
     const availableCount = this.accountPool.availableCount
     const baseMax = this.config.maxConcurrent
@@ -207,16 +200,20 @@ export class ProxyServer {
 
   addAccount(account: ProxyAccount): void {
     this.accountPool.addAccount(account)
+    this.recalculateDynamicConcurrency()
     logger.info('Account added', { id: account.id })
   }
 
   addAccounts(accounts: ProxyAccount[]): void {
     this.accountPool.addAccounts(accounts)
+    this.recalculateDynamicConcurrency()
     logger.info('Accounts added', { count: accounts.length })
   }
 
   removeAccount(id: string): boolean {
-    return this.accountPool.removeAccount(id)
+    const removed = this.accountPool.removeAccount(id)
+    if (removed) this.recalculateDynamicConcurrency()
+    return removed
   }
 
   updateAccount(id: string, updates: Partial<ProxyAccount>): void {
@@ -262,6 +259,27 @@ export class ProxyServer {
     model: string,
     path: string
   ): void {
+    // 持久化到 Redis（无论内部 map 是否有此 key）
+    apiKeyStore.updateDailyApiKeyStats(
+      apiKeyId,
+      credits,
+      inputTokens,
+      outputTokens,
+      cost
+    ).catch(err => {
+      logger.error('Failed to persist API key daily stats', { error: (err as Error).message })
+    })
+
+    apiKeyStore.updateApiKeyTotalStats(
+      apiKeyId,
+      credits,
+      inputTokens,
+      outputTokens,
+      cost
+    ).catch(err => {
+      logger.error('Failed to persist API key total stats', { error: (err as Error).message })
+    })
+
     const apiKey = this.apiKeys.get(apiKeyId)
     if (!apiKey) return
 
@@ -312,26 +330,6 @@ export class ProxyServer {
       apiKey.usageHistory = apiKey.usageHistory.slice(0, 100)
     }
 
-    // 持久化到 Redis
-    apiKeyStore.updateDailyApiKeyStats(
-      apiKeyId,
-      credits,
-      inputTokens,
-      outputTokens,
-      cost
-    ).catch(err => {
-      logger.error('Failed to persist API key daily stats', { error: (err as Error).message })
-    })
-
-    apiKeyStore.updateApiKeyTotalStats(
-      apiKeyId,
-      credits,
-      inputTokens,
-      outputTokens,
-      cost
-    ).catch(err => {
-      logger.error('Failed to persist API key total stats', { error: (err as Error).message })
-    })
   }
 
   // ============ Token 刷新 ============
@@ -769,16 +767,18 @@ export class ProxyServer {
     request: ClaudeRequest,
     _headers?: Record<string, string>,
     boundAccountIds?: string[],
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    matchedApiKeyId?: string
   ): Promise<{ success: boolean; response?: unknown; error?: string; statusCode?: number }> {
-    return this._handleClaudeRequest(request, _headers, boundAccountIds, signal)
+    return this._handleClaudeRequest(request, _headers, boundAccountIds, signal, matchedApiKeyId)
   }
 
   private async _handleClaudeRequest(
     request: ClaudeRequest,
     _headers?: Record<string, string>,
     boundAccountIds?: string[],
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    matchedApiKeyId?: string
   ): Promise<{ success: boolean; response?: unknown; error?: string; statusCode?: number }> {
     this.recordNewRequest()
     this.events.onRequest?.({ path: '/v1/messages', method: 'POST' })
@@ -816,8 +816,10 @@ export class ProxyServer {
         model: effectiveRequest.model || 'unknown',
       })
     } catch (error) {
-      const statusCode = error instanceof KiroApiError ? error.statusCode : 500
-      return { success: false, error: (error as Error).message, statusCode }
+      const msg = (error as Error).message
+      const statusCode = error instanceof KiroApiError ? error.statusCode
+        : msg.includes('502') || msg.includes('Too many concurrent') ? 502 : 500
+      return { success: false, error: msg, statusCode }
     }
 
     // 追踪账号并发
@@ -977,6 +979,11 @@ export class ProxyServer {
         ]).catch(err => {
           logger.error('Failed to persist daily stats', { error: (err as Error).message })
         })
+
+        // 记录 API Key 用量
+        if (matchedApiKeyId) {
+          this.recordApiKeyUsage(matchedApiKeyId, 0, uncachedInputTokens, outputTokens, cost2.totalCost, effectiveRequest.model, '/v1/messages')
+        }
       }
 
       return { success: true, response }
@@ -1015,11 +1022,11 @@ export class ProxyServer {
       onError: (error: Error) => void
     },
     headers?: Record<string, string>,
-    matchedApiKey?: ApiKey,
+    matchedApiKeyId?: string,
     boundAccountIds?: string[],
     signal?: AbortSignal
   ): Promise<void> {
-    await this._handleClaudeStreamRequest(request, callbacks, headers, matchedApiKey, boundAccountIds, signal)
+    await this._handleClaudeStreamRequest(request, callbacks, headers, matchedApiKeyId, boundAccountIds, signal)
   }
 
   private async _handleClaudeStreamRequest(
@@ -1030,7 +1037,7 @@ export class ProxyServer {
       onError: (error: Error) => void
     },
     headers?: Record<string, string>,
-    matchedApiKey?: ApiKey,
+    matchedApiKeyId?: string,
     boundAccountIds?: string[],
     signal?: AbortSignal
   ): Promise<void> {
@@ -1071,7 +1078,7 @@ export class ProxyServer {
     if (hasWebSearchTool(effectiveRequest)) {
       logger.info('WebSearch tool detected, routing to WebSearch handler')
       try {
-        await handleWebSearchStream(effectiveRequest, account, callbacks, matchedApiKey)
+        await handleWebSearchStream(effectiveRequest, account, callbacks, matchedApiKeyId)
       } catch (error) {
         callbacks.onError(error as Error)
       } finally {
@@ -1112,7 +1119,7 @@ export class ProxyServer {
             currentMessage.content = thinkingPrompt + '\n\n' + currentMessage.content
           }
         }
-        logger.info('Thinking mode enabled for Claude request')
+        // logger.info('Thinking mode enabled for Claude request')
       }
 
       // Calculate cache ratio before the API call
@@ -1175,7 +1182,7 @@ export class ProxyServer {
         undefined,
         false,
         0,
-        matchedApiKey,
+        matchedApiKeyId,
         cacheRatio,
         sessionHash,
         estimatedTotalInputTokens,
@@ -1225,7 +1232,7 @@ export class ProxyServer {
     msgId?: string,
     _headersSent: boolean = false,
     contentBlockIndex: number = 0,
-    matchedApiKey?: ApiKey,
+    matchedApiKeyId?: string,
     cacheRatio?: CacheRatio | null,
     sessionHash?: string | null,
     estimatedTotalInputTokens?: number,
@@ -1586,8 +1593,8 @@ export class ProxyServer {
               logger.error('Failed to persist daily stats', { error: (err as Error).message })
             })
 
-            if (matchedApiKey) {
-              this.recordApiKeyUsage(matchedApiKey.id, 0, uncachedInputTokens, outputTokens, costStream2.totalCost, model, '/v1/messages')
+            if (matchedApiKeyId) {
+              this.recordApiKeyUsage(matchedApiKeyId, 0, uncachedInputTokens, outputTokens, costStream2.totalCost, model, '/v1/messages')
             }
           }
 
@@ -1651,7 +1658,7 @@ export class ProxyServer {
                 id,
                 true,
                 currentBlockIndex,
-                matchedApiKey,
+                matchedApiKeyId,
                 null,          // don't recalculate cache ratio in auto-continue
                 sessionHash,   // keep session hash for binding
                 undefined,     // estimatedTotalInputTokens

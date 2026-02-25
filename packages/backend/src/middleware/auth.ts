@@ -6,6 +6,7 @@
 import { Request, Response, NextFunction } from 'express'
 import { createLogger } from '../utils/logger.js'
 import { validateApiKey } from '../storage/configStore.js'
+import { getApiKeyTotalStats } from '../storage/apiKeyStore.js'
 import type { ApiKeyRecord } from '../storage/configStore.js'
 import { getConfig } from '../config/index.js'
 
@@ -89,6 +90,21 @@ export async function authMiddleware(
       }
     })
     return
+  }
+
+  // 检查额度限制
+  if (record.quotaLimit && record.quotaLimit > 0) {
+    const totalStats = await getApiKeyTotalStats(record.id)
+    if (totalStats.cost >= record.quotaLimit) {
+      logger.warn('API key quota exceeded', { id: record.id, cost: totalStats.cost, limit: record.quotaLimit })
+      res.status(429).json({
+        error: {
+          message: 'API key quota exceeded',
+          type: 'rate_limit_error'
+        }
+      })
+      return
+    }
   }
 
   // 挂载到 req 上，供下游路由使用

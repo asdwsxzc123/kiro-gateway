@@ -69,16 +69,19 @@ export class RequestQueue {
    * @param signal 可选的 AbortSignal，客户端断开时取消排队
    */
   async acquire(signal?: AbortSignal): Promise<() => void> {
-    // 不启用排队时，不做并发限制，仅计数
-    if (!this.config.enabled) {
+    // 有空位，直接获取（无论是否启用排队）
+    if (this.activeCount < this.maxConcurrent) {
       this.activeCount++
       return () => this.release()
     }
 
-    // 有空位，直接获取
-    if (this.activeCount < this.maxConcurrent) {
-      this.activeCount++
-      return () => this.release()
+    // 并发已满，未启用排队时直接拒绝（502）
+    if (!this.config.enabled) {
+      logger.warn('Concurrency limit reached, rejecting (queue disabled)', {
+        active: this.activeCount,
+        maxConcurrent: this.maxConcurrent
+      })
+      throw new Error('Too many concurrent requests (502 overloaded)')
     }
 
     // 队列已满，拒绝
@@ -88,7 +91,7 @@ export class RequestQueue {
         maxSize: this.config.maxSize,
         active: this.activeCount
       })
-      throw new Error('Request queue full, too many concurrent requests')
+      throw new Error('Too many concurrent requests, queue full (502 overloaded)')
     }
 
     // 客户端已断开，不排队

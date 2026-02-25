@@ -113,6 +113,7 @@ router.get('/apikeys', async (_req: Request, res: Response) => {
       key: k.key,  // 完整 key，用于复制
       keyPreview: k.key.substring(0, 8) + '...',  // 预览，用于显示
       boundAccountIds: k.boundAccountIds || [],
+      quotaLimit: k.quotaLimit,
       createdAt: k.createdAt,
       lastUsed: k.lastUsed
     }))
@@ -133,7 +134,7 @@ router.get('/apikeys', async (_req: Request, res: Response) => {
  */
 router.post('/apikeys', async (req: Request, res: Response) => {
   try {
-    const { name, boundAccountIds } = req.body
+    const { name, boundAccountIds, quotaLimit } = req.body
     if (!name) {
       res.status(400).json({
         success: false,
@@ -150,6 +151,7 @@ router.post('/apikeys', async (req: Request, res: Response) => {
       key,
       name,
       boundAccountIds: Array.isArray(boundAccountIds) ? boundAccountIds : undefined,
+      quotaLimit: typeof quotaLimit === 'number' && quotaLimit > 0 ? quotaLimit : undefined,
       createdAt: Date.now()
     })
 
@@ -175,13 +177,14 @@ router.post('/apikeys', async (req: Request, res: Response) => {
 router.put('/apikeys/:id', async (req: Request, res: Response) => {
   try {
     const id = req.params.id as string
-    const { name, boundAccountIds } = req.body
+    const { name, boundAccountIds, quotaLimit } = req.body
 
-    const updates: Partial<Pick<configStore.ApiKeyRecord, 'name' | 'boundAccountIds'>> = {}
+    const updates: Partial<Pick<configStore.ApiKeyRecord, 'name' | 'boundAccountIds' | 'quotaLimit'>> = {}
     if (name !== undefined) updates.name = name
     if (boundAccountIds !== undefined) {
       updates.boundAccountIds = Array.isArray(boundAccountIds) ? boundAccountIds : []
     }
+    if (quotaLimit !== undefined) updates.quotaLimit = typeof quotaLimit === 'number' && quotaLimit > 0 ? quotaLimit : undefined
 
     const record = await configStore.updateApiKey(id, updates)
     if (!record) {
@@ -197,7 +200,8 @@ router.put('/apikeys/:id', async (req: Request, res: Response) => {
       data: {
         id: record.id,
         name: record.name,
-        boundAccountIds: record.boundAccountIds || []
+        boundAccountIds: record.boundAccountIds || [],
+        quotaLimit: record.quotaLimit,
       }
     } as ApiResponse)
   } catch (error) {
