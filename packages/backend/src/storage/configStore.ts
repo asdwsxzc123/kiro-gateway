@@ -13,6 +13,7 @@ const logger = createLogger('ConfigStore')
 const CONFIG_KEY = 'config'
 const SELECTED_ACCOUNTS_KEY = 'config:selectedAccounts'
 const API_KEYS_KEY = 'config:apiKeys'
+const API_KEYS_INDEX_KEY = 'config:apiKeyIndex'
 
 export interface GatewayConfig {
   // 服务配置
@@ -296,7 +297,10 @@ export async function addApiKey(record: ApiKeyRecord): Promise<void> {
   const redis = getRedisClient()
 
   try {
-    await redis.hset(API_KEYS_KEY, record.id, JSON.stringify(record))
+    const pipeline = redis.pipeline()
+    pipeline.hset(API_KEYS_KEY, record.id, JSON.stringify(record))
+    pipeline.hset(API_KEYS_INDEX_KEY, record.key, record.id)
+    await pipeline.exec()
     logger.info('API key added', { id: record.id, name: record.name })
   } catch (error) {
     logger.error('Failed to add API key', { error: (error as Error).message })
@@ -311,8 +315,17 @@ export async function deleteApiKey(id: string): Promise<boolean> {
   const redis = getRedisClient()
 
   try {
-    const result = await redis.hdel(API_KEYS_KEY, id)
-    if (result > 0) {
+    const raw = await redis.hget(API_KEYS_KEY, id)
+    if (!raw) return false
+    const record = JSON.parse(raw) as ApiKeyRecord
+
+    const pipeline = redis.pipeline()
+    pipeline.hdel(API_KEYS_KEY, id)
+    pipeline.hdel(API_KEYS_INDEX_KEY, record.key)
+    const result = await pipeline.exec()
+
+    const deleted = result?.[0]?.[1] as number | undefined
+    if ((deleted ?? 0) > 0) {
       logger.info('API key deleted', { id })
       return true
     }
@@ -331,6 +344,23 @@ export async function validateApiKey(key: string): Promise<ApiKeyRecord | null> 
   const redis = getRedisClient()
 
   try {
+    const recordId = await redis.hget(API_KEYS_INDEX_KEY, key)
+    if (recordId) {
+      const raw = await redis.hget(API_KEYS_KEY, recordId)
+      if (raw) {
+        const record = JSON.parse(raw) as ApiKeyRecord
+        if (record.key === key) {
+          record.lastUsed = Date.now()
+          redis.hset(API_KEYS_KEY, record.id, JSON.stringify(record)).catch((error) => {
+            logger.warn('Failed to update API key lastUsed', { id: record.id, error: (error as Error).message })
+          })
+          return record
+        }
+      }
+      // 索引脏数据，清理掉后走降级扫描
+      await redis.hdel(API_KEYS_INDEX_KEY, key)
+    }
+
     const data = await redis.hgetall(API_KEYS_KEY)
 
     if (!data || Object.keys(data).length === 0) {
@@ -339,15 +369,22 @@ export async function validateApiKey(key: string): Promise<ApiKeyRecord | null> 
       return null
     }
 
+    // 兼容旧数据：当索引不存在时重建 key->id 索引
+    const indexPipeline = redis.pipeline()
     for (const json of Object.values(data)) {
       const record = JSON.parse(json) as ApiKeyRecord
+      indexPipeline.hset(API_KEYS_INDEX_KEY, record.key, record.id)
       if (record.key === key) {
         // 更新最后使用时间
         record.lastUsed = Date.now()
-        await redis.hset(API_KEYS_KEY, record.id, JSON.stringify(record))
+        redis.hset(API_KEYS_KEY, record.id, JSON.stringify(record)).catch((error) => {
+          logger.warn('Failed to update API key lastUsed', { id: record.id, error: (error as Error).message })
+        })
+        await indexPipeline.exec()
         return record
       }
     }
+    await indexPipeline.exec()
 
     return null
   } catch (error) {

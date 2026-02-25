@@ -114,7 +114,7 @@ function formatUptime(seconds: number): string {
 /**
  * 健康心跳 + 请求死锁检测
  * 1. 检查是否有请求卡死超过阈值时间 → 推送 request_stuck 告警
- * 2. 推送心跳通知，表明服务存活
+ * 2. 推送心跳通知，异常账户信息附带在通知中
  */
 export async function checkHealthAndNotify(): Promise<void> {
   const now = Date.now()
@@ -123,7 +123,20 @@ export async function checkHealthAndNotify(): Promise<void> {
   // 死锁检测：找出超过阈值的请求
   const stuckRequests = inflight.filter(r => (now - r.startTime) >= STUCK_THRESHOLD_MS)
 
-  if (stuckRequests.length > 0) {
+  // 获取所有账户，检查是否有异常
+  const accounts: ProxyAccount[] = await accountStore.getAllAccounts()
+  const activeAccounts = accounts.filter(
+    a => a.status === 'active' || a.status === undefined
+  )
+  const abnormalAccounts = accounts.filter(
+    a => a.status !== 'active' && a.status !== undefined
+  )
+
+  const hasAbnormalAccounts = abnormalAccounts.length > 0
+  const hasStuckRequests = stuckRequests.length > 0
+
+  // 如果有卡死请求，发送 request_stuck 告警
+  if (hasStuckRequests) {
     const details = stuckRequests.map(r => {
       const durationMin = Math.round((now - r.startTime) / 60000)
       return `${r.model} (${durationMin}min)`
@@ -145,11 +158,18 @@ export async function checkHealthAndNotify(): Promise<void> {
     }).catch(() => {})
   }
 
-  // 心跳通知
-  const accounts: ProxyAccount[] = await accountStore.getAllAccounts()
-  const activeAccounts = accounts.filter(
-    a => a.status === 'active' || a.status === undefined
-  )
+  // 心跳通知（异常账户详情按需附带）
+  let abnormalDetails = ''
+  if (hasAbnormalAccounts) {
+    abnormalDetails = abnormalAccounts.map(a =>
+      `${a.email || a.id.slice(0,12)} (${a.status}${a.statusReason ? ': ' + a.statusReason : ''})`
+    ).join(', ')
+
+    logger.warn('Abnormal accounts detected', {
+      count: abnormalAccounts.length,
+      details: abnormalDetails
+    })
+  }
 
   notify({
     type: 'heartbeat',
@@ -160,6 +180,8 @@ export async function checkHealthAndNotify(): Promise<void> {
       stuckCount: stuckRequests.length,
       totalAccounts: accounts.length,
       availableAccounts: activeAccounts.length,
+      abnormalAccounts: abnormalAccounts.length,
+      abnormalDetails,
     },
   }).catch(() => {})
 }

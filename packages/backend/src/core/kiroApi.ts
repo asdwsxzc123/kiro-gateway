@@ -551,8 +551,6 @@ async function parseEventStream(
   let currentToolUse: ToolUseState | null = null
   const processedIds = new Set<string>()
 
-  console.log(`[parseEventStream] 开始（自计算 token 模式）`)
-
   try {
     while (true) {
       const { done, value } = await reader.read()
@@ -724,7 +722,6 @@ async function parseEventStream(
               }
             }
           // 调试：打印所有事件类型（包括常见类型）
-            logger.debug( 'Kiro Event: ' + (eventType || 'unknown') + ' ' + JSON.stringify(event).slice(0, 500))
             // 处理 meteringEvent — 记录 Kiro 上游实际消耗的积分
             if (eventType === 'meteringEvent' || event.meteringEvent) {
               const metering = event.meteringEvent || event
@@ -975,8 +972,6 @@ export async function callKiroApiStream(
 
         throw kiroError
       }
-      console.log(`[Response] status=${response.status} ok=${response.ok}`)
-
       await parseEventStream(response.body!, onChunk, onComplete, onError)
       return
     } catch (error) {

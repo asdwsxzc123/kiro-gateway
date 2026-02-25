@@ -199,3 +199,23 @@ export async function getTopApiKeysByCost(limit: number = 5, days: number = 7): 
     cost: item.totalCost
   }))
 }
+
+/**
+ * Session 统计类型
+ */
+export interface SessionStats {
+  totalSessions: number
+  sessions: Array<{
+    hash: string
+    accountId: string
+    ttl: number
+  }>
+}
+
+/**
+ * 获取 Session 粘性统计
+ */
+export async function getSessionStats(): Promise<SessionStats> {
+  const response = await apiClient.get<ApiResponse<SessionStats>>("/stats/sessions")
+  return response.data.data ?? { totalSessions: 0, sessions: [] }
+}

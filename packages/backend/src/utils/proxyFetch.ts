@@ -28,10 +28,23 @@ export async function proxyFetch(
   options: RequestInit = {},
   proxyUrl?: string
 ): Promise<Response> {
-  if (!proxyUrl) return fetch(url, options)
-  const dispatcher = getProxyDispatcher(proxyUrl)
-  return undiciFetch(url as string, {
-    ...options as Record<string, unknown>,
-    dispatcher
-  }) as unknown as Response
+  if (!proxyUrl) {
+    return fetch(url, options)
+  }
+
+  try {
+    const dispatcher = getProxyDispatcher(proxyUrl)
+    return await undiciFetch(url as string, {
+      ...options as Record<string, unknown>,
+      dispatcher
+    }) as unknown as Response
+  } catch (error) {
+    const err = error as Error
+    // 增强错误信息，明确标识代理连接失败
+    const proxyError = new Error(
+      `代理连接失败 (${proxyUrl}): ${err.message}`
+    )
+    proxyError.cause = err
+    throw proxyError
+  }
 }

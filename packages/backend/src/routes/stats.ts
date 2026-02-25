@@ -8,6 +8,7 @@ import type { Router as IRouter } from 'express'
 import { createLogger } from '../utils/logger.js'
 import * as statsService from '../services/statsService.js'
 import { getConcurrencyStatus } from './proxy.js'
+import { getSessionStats } from '../core/sessionCache.js'
 import type { ApiResponse } from '../core/types.js'
 
 const logger = createLogger('StatsRoute')
@@ -365,6 +366,23 @@ router.get('/top/apikeys', async (req: Request, res: Response) => {
     res.json({ success: true, data: topApiKeys } as ApiResponse)
   } catch (error) {
     logger.error('Failed to get top API Keys by cost', { error: (error as Error).message })
+    res.status(500).json({
+      success: false,
+      error: { message: (error as Error).message }
+    } as ApiResponse)
+  }
+})
+
+/**
+ * 获取 Session 粘性统计
+ * GET /api/stats/sessions
+ */
+router.get('/sessions', async (_req: Request, res: Response) => {
+  try {
+    const stats = await getSessionStats()
+    res.json({ success: true, data: stats } as ApiResponse)
+  } catch (error) {
+    logger.error('Failed to get session stats', { error: (error as Error).message })
     res.status(500).json({
       success: false,
       error: { message: (error as Error).message }

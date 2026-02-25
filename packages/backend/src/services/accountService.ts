@@ -298,8 +298,20 @@ export async function testAccountConnection(id: string): Promise<{
     }
   } catch (error) {
     const errorMsg = (error as Error).message
-    logger.error('Connection test failed', { id, error: errorMsg })
-    await accountStore.updateAccount(id, { status: 'error_suspended', statusReason: `测试失败: ${errorMsg}` })
+    // 判断是否为代理错误
+    const isProxyError = errorMsg.includes('代理连接失败')
+    const statusReason = isProxyError
+      ? errorMsg
+      : `测试失败: ${errorMsg}`
+
+    logger.error('Connection test failed', {
+      id,
+      error: errorMsg,
+      isProxyError,
+      proxyUrl: account.proxyUrl
+    })
+
+    await accountStore.updateAccount(id, { status: 'error_suspended', statusReason })
     notify({
       type: 'account_error',
       timestamp: new Date().toISOString(),

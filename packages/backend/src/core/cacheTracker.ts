@@ -327,7 +327,7 @@ export async function calculateCacheRatio(
   // estimateMessagesTokens 已排除 cache_control 块和 assistant 消息
   const uncachedMessagesWeight = estimateMessagesTokens(request.messages)
 
-  logger.info('Cache ratio calculation', {
+  logger.debug('Cache ratio calculation', {
     model: request.model,
     blocksFound: blocks.length,
     uncachedMessagesWeight,
@@ -335,8 +335,7 @@ export async function calculateCacheRatio(
     systemType: typeof request.system,
     hasTools: !!request.tools,
     toolsCount: request.tools?.length || 0,
-    messageCount: request.messages.length,
-    blockTokens: blocks.map(b => ({ hash: b.hash.substring(0, 8), tokens: b.tokens }))
+    messageCount: request.messages.length
   })
 
   if (blocks.length === 0) {
@@ -398,7 +397,7 @@ export async function calculateCacheRatio(
   const uncachedWeight = uncachedMessagesWeight
   const totalWeight = uncachedWeight + cacheCreationWeight + cacheReadWeight
 
-  logger.info('Cache ratio result', {
+  logger.debug('Cache ratio result', {
     cacheCreationWeight,
     cacheReadWeight,
     uncachedWeight,
@@ -453,7 +452,7 @@ export function splitTokensByRatio(
     totalInputTokens: uncachedTokens + cacheCreationTokens + cacheReadTokens
   }
 
-  logger.info('Token split result', {
+  logger.debug('Token split result', {
     actualInputTokens,
     originalCacheCreation: ratio.cacheCreationWeight,
     cappedCacheCreation: cacheCreationTokens,
