@@ -54,9 +54,11 @@ export function Settings() {
   const [isAddKeyDialogOpen, setIsAddKeyDialogOpen] = useState(false)
   const [newKeyName, setNewKeyName] = useState("")
   const [newKeyBoundAccountIds, setNewKeyBoundAccountIds] = useState<string[]>([])
+  const [newKeyQuotaLimit, setNewKeyQuotaLimit] = useState<string>("")
   // 编辑绑定账号的对话框状态
   const [editingKeyId, setEditingKeyId] = useState<string | null>(null)
   const [editBoundAccountIds, setEditBoundAccountIds] = useState<string[]>([])
+  const [editQuotaLimit, setEditQuotaLimit] = useState<string>("")
   const [sortBy, setSortBy] = useState<"name" | "todayCost" | "totalCost">("name")
   const [sortOrder, setSortOrder] = useState<"asc" | "desc">("asc")
 
@@ -171,6 +173,7 @@ export function Settings() {
       setIsAddKeyDialogOpen(false)
       setNewKeyName("")
       setNewKeyBoundAccountIds([])
+      setNewKeyQuotaLimit("")
       // 显示新创建的 key
       toast({
         title: "创建成功",
@@ -188,7 +191,7 @@ export function Settings() {
 
   // 更新 API Key 绑定账号
   const updateKeyMutation = useMutation({
-    mutationFn: ({ id, data }: { id: string; data: { boundAccountIds: string[] } }) =>
+    mutationFn: ({ id, data }: { id: string; data: { boundAccountIds?: string[]; quotaLimit?: number } }) =>
       updateApiKey(id, data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["apiKeys"] })
@@ -479,11 +482,23 @@ export function Settings() {
                         )}
                       </div>
                     </div>
+                    <div className="grid gap-2">
+                      <Label htmlFor="keyQuota">额度上限（美元，可选）</Label>
+                      <Input
+                        id="keyQuota"
+                        type="number"
+                        min="0"
+                        step="0.01"
+                        placeholder="不填则不限制"
+                        value={newKeyQuotaLimit}
+                        onChange={(e) => setNewKeyQuotaLimit(e.target.value)}
+                      />
+                    </div>
                   </div>
                   <DialogFooter>
                     <Button
                       variant="outline"
-                      onClick={() => { setIsAddKeyDialogOpen(false); setNewKeyBoundAccountIds([]) }}
+                      onClick={() => { setIsAddKeyDialogOpen(false); setNewKeyBoundAccountIds([]); setNewKeyQuotaLimit("") }}
                     >
                       取消
                     </Button>
@@ -491,6 +506,7 @@ export function Settings() {
                       onClick={() => createKeyMutation.mutate({
                         name: newKeyName,
                         boundAccountIds: newKeyBoundAccountIds.length > 0 ? newKeyBoundAccountIds : undefined,
+                        quotaLimit: newKeyQuotaLimit ? parseFloat(newKeyQuotaLimit) : undefined,
                       })}
                       disabled={!newKeyName || createKeyMutation.isPending}
                     >
@@ -534,6 +550,7 @@ export function Settings() {
                       >
                         累计费用 <SortIndicator field="totalCost" />
                       </TableHead>
+                      <TableHead>额度</TableHead>
                       <TableHead className="text-right">操作</TableHead>
                     </TableRow>
                   </TableHeader>
@@ -568,6 +585,21 @@ export function Settings() {
                           <TableCell className="font-semibold text-orange-600">
                             {apiKey.costData ? formatCost(apiKey.costData.totalCost) : "-"}
                           </TableCell>
+                          <TableCell>
+                            {apiKey.quotaLimit && apiKey.quotaLimit > 0 ? (
+                              <span className={
+                                apiKey.costData && apiKey.costData.totalCost >= apiKey.quotaLimit
+                                  ? "text-red-600 font-semibold"
+                                  : apiKey.costData && apiKey.costData.totalCost >= apiKey.quotaLimit * 0.8
+                                    ? "text-yellow-600 font-semibold"
+                                    : "text-muted-foreground"
+                              }>
+                                ${apiKey.quotaLimit.toFixed(2)}
+                              </span>
+                            ) : (
+                              <span className="text-muted-foreground">-</span>
+                            )}
+                          </TableCell>
                           <TableCell className="text-right">
                             <div className="flex justify-end gap-1">
                               {/* 编辑绑定账号 */}
@@ -577,6 +609,7 @@ export function Settings() {
                                 onClick={() => {
                                   setEditingKeyId(apiKey.id)
                                   setEditBoundAccountIds(boundIds)
+                                  setEditQuotaLimit(apiKey.quotaLimit && apiKey.quotaLimit > 0 ? String(apiKey.quotaLimit) : "")
                                 }}
                                 title="编辑绑定账号"
                               >
@@ -618,11 +651,14 @@ export function Settings() {
                 <Dialog open={!!editingKeyId} onOpenChange={(open) => !open && setEditingKeyId(null)}>
                   <DialogContent>
                     <DialogHeader>
-                      <DialogTitle>编辑绑定账号</DialogTitle>
+                      <DialogTitle>编辑 API Key</DialogTitle>
                       <DialogDescription>
-                        选择此 API Key 可使用的账号，不选择则使用全局账号池
+                        设置绑定账号和额度上限
                       </DialogDescription>
                     </DialogHeader>
+                    <div className="grid gap-4">
+                    <div>
+                      <Label className="mb-2 block">绑定账号</Label>
                     <div className="max-h-60 overflow-y-auto border rounded-md p-2 space-y-1">
                       {accounts.length === 0 ? (
                         <p className="text-sm text-muted-foreground">暂无账号</p>
@@ -646,6 +682,19 @@ export function Settings() {
                         ))
                       )}
                     </div>
+                    </div>
+                    <div>
+                      <Label className="mb-2 block">额度上限（美元）</Label>
+                      <Input
+                        type="number"
+                        min="0"
+                        step="0.01"
+                        placeholder="不填则不限制"
+                        value={editQuotaLimit}
+                        onChange={(e) => setEditQuotaLimit(e.target.value)}
+                      />
+                    </div>
+                    </div>
                     <DialogFooter>
                       <Button variant="outline" onClick={() => setEditingKeyId(null)}>
                         取消
@@ -655,7 +704,10 @@ export function Settings() {
                           if (editingKeyId) {
                             updateKeyMutation.mutate({
                               id: editingKeyId,
-                              data: { boundAccountIds: editBoundAccountIds },
+                              data: {
+                                boundAccountIds: editBoundAccountIds,
+                                quotaLimit: editQuotaLimit ? parseFloat(editQuotaLimit) : undefined,
+                              },
                             })
                           }
                         }}

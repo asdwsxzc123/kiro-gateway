@@ -211,7 +211,7 @@ export function Logs() {
   const formatCost = (cost?: number) => {
     if (cost === undefined || cost === null) return "$0"
     if (cost === 0) return "$0"
-    return `$${cost.toFixed(6)}`
+    return `$${cost.toFixed(3)}`
   }
 
   // 分页处理函数
@@ -469,7 +469,7 @@ export function Logs() {
                       <TableCell className="text-right">{formatTokens(log.cacheReadTokens ?? 0)}</TableCell>
                       <TableCell className="text-right">{formatTokens(log.cacheCreationTokens ?? 0)}</TableCell>
                       <TableCell className="text-right whitespace-nowrap">{formatCost(log.cost)}</TableCell>
-                      <TableCell className="text-right">{log.kiroCredits ?? "-"}</TableCell>
+                      <TableCell className="text-right">{log.kiroCredits != null ? log.kiroCredits.toFixed(3) : "-"}</TableCell>
                       <TableCell>
                         {log.auxiliary ? (
                           <span className="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium bg-gray-100 text-gray-600">

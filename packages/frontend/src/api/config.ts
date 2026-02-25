@@ -37,7 +37,7 @@ export async function createApiKey(data: CreateApiKeyRequest & { boundAccountIds
 /**
  * 更新 API Key（名称、绑定账号）
  */
-export async function updateApiKey(id: string, data: { name?: string; boundAccountIds?: string[] }): Promise<ApiKeyRecord> {
+export async function updateApiKey(id: string, data: { name?: string; boundAccountIds?: string[]; quotaLimit?: number }): Promise<ApiKeyRecord> {
   const response = await apiClient.put<ApiResponse<ApiKeyRecord>>(`/admin/apikeys/${id}`, data)
   return response.data.data!
 }

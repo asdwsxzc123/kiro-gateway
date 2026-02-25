@@ -41,7 +41,7 @@ import { EditAccountDialog } from "@/components/accounts/EditAccountDialog"
  * 支持添加、删除、刷新 Token 等操作
  */
 export function Accounts() {
-  const defaultBatchImportConcurrency = 10
+  const defaultBatchImportConcurrency = 8
   const [isAddDialogOpen, setIsAddDialogOpen] = useState(false)
   const [isEditDialogOpen, setIsEditDialogOpen] = useState(false)
   const [editingAccount, setEditingAccount] = useState<Account | null>(null)

@@ -120,12 +120,12 @@ export async function getGlobalDailyCosts(startDate: string, endDate: string): P
  * 获取所有 API Key 的今日费用
  */
 export async function getAllApiKeysTodayCost(): Promise<ApiKeyCostData[]> {
-  const response = await apiClient.get<ApiResponse<Array<{ id: string; name: string; cost: number }>>>("/stats/today/apikeys")
+  const response = await apiClient.get<ApiResponse<Array<{ id: string; name: string; cost: number; totalCost: number }>>>("/stats/today/apikeys")
   return (response.data.data ?? []).map(item => ({
     apiKeyId: item.id,
     name: item.name,
     todayCost: item.cost,
-    totalCost: 0
+    totalCost: item.totalCost,
   }))
 }
 

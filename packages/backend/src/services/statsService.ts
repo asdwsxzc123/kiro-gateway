@@ -9,6 +9,7 @@ import * as accountStore from '../storage/accountStore.js'
 import * as dailyStatsStore from '../storage/dailyStatsStore.js'
 import type { DailyStats, DailyAccountStats, DailyModelStats } from '../storage/dailyStatsStore.js'
 import * as apiKeyStore from '../storage/apiKeyStore.js'
+import * as configStore from '../storage/configStore.js'
 import { createLogger } from '../utils/logger.js'
 import type { AccountStats, ModelStats } from '../core/types.js'
 
@@ -207,22 +208,27 @@ export async function getAllApiKeysTodayCost(): Promise<
     id: string
     name: string
     cost: number
+    totalCost: number
   }>
 > {
-  const apiKeys = await apiKeyStore.getAllApiKeyMeta()
+  const apiKeys = await configStore.getAllApiKeys()
   const today = new Date()
-  const result: Array<{ id: string; name: string; cost: number }> = []
+  const result: Array<{ id: string; name: string; cost: number; totalCost: number }> = []
 
   for (const apiKey of apiKeys) {
-    const stats = await apiKeyStore.getDailyApiKeyStats(apiKey.id, today)
+    const [dailyStats, totalStats] = await Promise.all([
+      apiKeyStore.getDailyApiKeyStats(apiKey.id, today),
+      apiKeyStore.getApiKeyTotalStats(apiKey.id),
+    ])
     result.push({
       id: apiKey.id,
       name: apiKey.name,
-      cost: stats.cost
+      cost: dailyStats.cost,
+      totalCost: totalStats.cost,
     })
   }
 
-  return result.filter((item) => item.cost > 0)
+  return result.filter((item) => item.cost > 0 || item.totalCost > 0)
 }
 
 /**

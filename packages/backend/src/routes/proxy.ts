@@ -31,7 +31,7 @@ function getHttpStatusFromError(error: Error): number {
   }
   const msg = error.message
   if (msg.includes('429') || msg.includes('quota')) return 429
-  if (msg.includes('529') || msg.includes('overloaded')) return 529
+  if (msg.includes('529') || msg.includes('overloaded') || msg.includes('Too many concurrent')) return 502
   if (msg.includes('402') || msg.includes('MONTHLY_REQUEST_COUNT')) return 402
   if (msg.includes('No available accounts')) return 503
   return 500
@@ -43,6 +43,7 @@ function getHttpStatusFromError(error: Error): number {
 function getClaudeErrorType(statusCode: number): string {
   switch (statusCode) {
     case 429: return 'rate_limit_error'
+    case 502: return 'overloaded_error'
     case 529: return 'overloaded_error'
     case 402: return 'rate_limit_error'
     case 401: case 403: return 'authentication_error'
@@ -213,9 +214,9 @@ router.post('/messages', async (req: Request, res: Response) => {
 
   // 调试：打印原始请求中的 tools 字段
   if (request.tools && request.tools.length > 0) {
-    logger.debug('Request tools', { tools: request.tools.map(t => t.name) })
+    // logger.debug('Request tools', { tools: request.tools.map(t => t.name) })
   } else {
-    logger.warn('No tools in request - AI will not be able to call tools!')
+    // logger.warn('No tools in request - AI will not be able to call tools!')
   }
 
   // 客户端断开检测：创建 AbortController，客户端断开时取消上游请求
@@ -243,6 +244,7 @@ router.post('/messages', async (req: Request, res: Response) => {
 
     // 从 API Key 记录中获取绑定的账号列表
     const boundAccountIds = req.matchedApiKeyRecord?.boundAccountIds
+    const matchedApiKeyId = req.matchedApiKeyRecord?.id
 
     if (isStream) {
       // 流式响应
@@ -290,13 +292,13 @@ router.post('/messages', async (req: Request, res: Response) => {
           }
         },
         headers,
-        undefined,         // matchedApiKey
+        matchedApiKeyId,   // API Key ID for usage tracking
         boundAccountIds,   // 绑定的账号 ID 列表
         abortController.signal  // AbortSignal for client disconnect
       )
     } else {
       // 非流式响应
-      const result = await server.handleClaudeRequest(request, headers, boundAccountIds, abortController.signal)
+      const result = await server.handleClaudeRequest(request, headers, boundAccountIds, abortController.signal, matchedApiKeyId)
 
       if (!clientDisconnected) {
         if (result.success && result.response) {

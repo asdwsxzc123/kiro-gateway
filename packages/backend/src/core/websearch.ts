@@ -8,7 +8,7 @@
 import { v4 as uuidv4 } from 'uuid'
 import { createLogger } from '../utils/logger.js'
 import { getKiroUserAgent, getKiroAmzUserAgent } from './kiroApi.js'
-import type { ClaudeRequest, ProxyAccount, ApiKey } from './types.js'
+import type { ClaudeRequest, ProxyAccount } from './types.js'
 
 const logger = createLogger('WebSearch')
 
@@ -384,7 +384,7 @@ export async function handleWebSearchStream(
     onComplete: () => void
     onError: (error: Error) => void
   },
-  _matchedApiKey?: ApiKey
+  _matchedApiKeyId?: string
 ): Promise<void> {
   // 1. 提取搜索查询
   const query = extractSearchQuery(request)
