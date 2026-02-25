@@ -18,8 +18,8 @@ const SYSTEM_LOGS_STREAM = 'logs:system'
 const MAX_REQUEST_LOGS = 100000
 const MAX_SYSTEM_LOGS = 50000
 
-// 日志保留时间（5 天，毫秒）
-const LOG_RETENTION_MS = 5 * 24 * 60 * 60 * 1000
+// 日志保留时间（7 天，毫秒）
+const LOG_RETENTION_MS = 7 * 24 * 60 * 60 * 1000
 
 /**
  * 添加请求日志

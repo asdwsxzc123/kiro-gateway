@@ -46,7 +46,8 @@ export const requestFileLogger = winston.createLogger({
       dirname: path.join(logDir, 'requests'),
       filename: 'requests-%DATE%.log',
       datePattern: 'YYYY-MM-DD',
-      maxFiles: '30d',
+      zippedArchive: true,
+      maxFiles: '7d',
       format: winston.format.combine(
         winston.format.timestamp(),
         winston.format.json()
@@ -62,7 +63,8 @@ export const systemFileLogger = winston.createLogger({
       dirname: path.join(logDir, 'system'),
       filename: 'system-%DATE%.log',
       datePattern: 'YYYY-MM-DD',
-      maxFiles: '30d',
+      zippedArchive: true,
+      maxFiles: '7d',
       format: winston.format.combine(
         winston.format.timestamp(),
         winston.format.json()

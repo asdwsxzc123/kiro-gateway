@@ -96,6 +96,18 @@ export async function resumeAccount(id: string): Promise<{ id: string; status: s
 }
 
 /**
+ * 批量导入账号（支持直接传入导出格式的 JSON 数组）
+ */
+export async function batchImportAccounts(
+  accounts: Record<string, unknown>[]
+): Promise<{ success: number; failed: number; errors: string[] }> {
+  const response = await apiClient.post<
+    ApiResponse<{ success: number; failed: number; errors: string[] }>
+  >("/accounts/batch/import", accounts)
+  return response.data.data!
+}
+
+/**
  * 批量获取所有账号使用量
  */
 export async function getAllAccountsUsage(): Promise<AccountUsage[]> {
