@@ -399,6 +399,7 @@ export interface ApiKeyRecord {
 export interface CreateApiKeyRequest {
   name: string;
   boundAccountIds?: string[];  // 创建时可选绑定账号
+  quotaLimit?: number;         // 额度限制
 }
 
 /**
