@@ -49,6 +49,7 @@ const logger = createLogger('ProxyServer')
 // 计费 token 上限
 const MAX_BILLING_TOKENS_200K = 200000
 const MAX_BILLING_TOKENS_1M = 1000000
+const MAX_INPUT_TOKENS = 30000
 
 /**
  * 判断是否为 1M 上下文模型
@@ -66,6 +67,15 @@ function capBillingTokens(tokens: number, model: string): number {
   const max = is1MModel(model) ? MAX_BILLING_TOKENS_1M : MAX_BILLING_TOKENS_200K
   if (tokens <= max) return tokens
   return Math.floor(max * (0.75 + Math.random() * 0.245))
+}
+
+/**
+ * 限制 input tokens 不超过 3w
+ * 超出时返回 3w 以内的随机浮动值（75%-99.5%）
+ */
+function capInputTokens(tokens: number): number {
+  if (tokens <= MAX_INPUT_TOKENS) return tokens
+  return Math.floor(MAX_INPUT_TOKENS * (0.75 + Math.random() * 0.245))
 }
 
 // 默认配置
@@ -393,8 +403,9 @@ export class ProxyServer {
   async selectAccount(
     sessionHash?: string | null,
     boundAccountIds?: string[]
-  ): Promise<ProxyAccount | null> {
+  ): Promise<{ account: ProxyAccount | null; stickyFallback?: boolean }> {
     let account: ProxyAccount | null = null
+    let stickyFallback = false
 
     // 1. 粘性会话绑定（带智能续期和验证）
     if (sessionHash) {
@@ -402,11 +413,19 @@ export class ProxyServer {
       if (stickyAccountId) {
         const inBoundList = !boundAccountIds || boundAccountIds.length === 0 || boundAccountIds.includes(stickyAccountId)
         if (inBoundList) {
-          account = this.accountPool.getAccountIfAvailable(stickyAccountId)
-          if (account) {
-            // 🚀 智能续期：剩余时间低于阈值时自动续期
+          const result = this.accountPool.getAccountIfAvailable(stickyAccountId)
+          if (result.account) {
+            // 智能续期：剩余时间低于阈值时自动续期
             await extendSessionTTL(sessionHash)
+            account = result.account
             logger.debug('Using sticky session account', { accountId: account.id, sessionHash })
+          } else if (result.reason === 'concurrency_full') {
+            // 并发满：保留会话映射，fallthrough 到池选择，标记不覆盖映射
+            stickyFallback = true
+            logger.info('Sticky session account concurrency full, falling through to pool', {
+              accountId: stickyAccountId,
+              sessionHash
+            })
           } else {
             // 账号不可用（cooldown/error/paused），删除会话映射
             logger.warn('Sticky session account unavailable, clearing mapping', {
@@ -441,7 +460,7 @@ export class ProxyServer {
         poolSize: this.accountPool.getPoolSize(),
         bound: boundAccountIds?.length ?? 0
       })
-      return null
+      return { account: null }
     }
 
     // 3. Region 兜底
@@ -456,13 +475,13 @@ export class ProxyServer {
       if (!refreshed) {
         const nextAccount = this.accountPool.getNextAvailableAccount(account.id)
         if (nextAccount) {
-          return nextAccount
+          return { account: nextAccount, stickyFallback }
         }
       }
-      return this.accountPool.getAccount(account.id)
+      return { account: this.accountPool.getAccount(account.id), stickyFallback }
     }
 
-    return account
+    return { account, stickyFallback }
   }
 
   // ============ 统计管理 ============
@@ -650,10 +669,24 @@ export class ProxyServer {
     return { kind: 'unknown', retryable: false }
   }
 
+  /**
+   * 切换重试账号时同步更新并发追踪
+   */
+  private swapConcurrencyTracking(
+    concurrencyRef: { accountId: string } | undefined,
+    newAccount: ProxyAccount
+  ): void {
+    if (!concurrencyRef || concurrencyRef.accountId === newAccount.id) return
+    this.accountPool.decrementConcurrency(concurrencyRef.accountId)
+    this.accountPool.incrementConcurrency(newAccount.id)
+    concurrencyRef.accountId = newAccount.id
+  }
+
   private async callWithRetry<T>(
     account: ProxyAccount,
     apiCall: (acc: ProxyAccount) => Promise<T>,
-    _path: string
+    _path: string,
+    concurrencyRef?: { accountId: string }
   ): Promise<{ result: T; account: ProxyAccount }> {
     const maxRetries = this.config.maxRetries
     let currentAccount = account
@@ -682,6 +715,7 @@ export class ProxyServer {
             logger.warn('Account auto-paused due to monthly limit', { accountId: currentAccount.id })
             const nextAccount = this.accountPool.getNextAvailableAccount(currentAccount.id)
             if (nextAccount && hasMoreAttempts) {
+              this.swapConcurrencyTracking(concurrencyRef, nextAccount)
               currentAccount = nextAccount
               continue
             }
@@ -693,6 +727,7 @@ export class ProxyServer {
             logger.warn('Account suspended (banned by Kiro), switching account', { accountId: currentAccount.id })
             const nextAccount = this.accountPool.getNextAvailableAccount(currentAccount.id)
             if (nextAccount && hasMoreAttempts) {
+              this.swapConcurrencyTracking(concurrencyRef, nextAccount)
               currentAccount = nextAccount
               continue
             }
@@ -719,6 +754,7 @@ export class ProxyServer {
                   from: currentAccount.id,
                   to: nextAccount.id
                 })
+                this.swapConcurrencyTracking(concurrencyRef, nextAccount)
                 currentAccount = nextAccount
                 continue
               }
@@ -734,6 +770,7 @@ export class ProxyServer {
             await new Promise(resolve => setTimeout(resolve, jitter))
             const nextAccount = this.accountPool.getNextAvailableAccount(currentAccount.id)
             if (nextAccount) {
+              this.swapConcurrencyTracking(concurrencyRef, nextAccount)
               currentAccount = nextAccount
             }
             continue
@@ -799,7 +836,7 @@ export class ProxyServer {
 
     // 统一账号选择
     const sessionHash = computeSessionHash(effectiveRequest, _headers?.['x-session-id'])
-    const account = await this.selectAccount(sessionHash, boundAccountIds)
+    const { account, stickyFallback } = await this.selectAccount(sessionHash, boundAccountIds)
     if (!account) {
       this.recordRequestFailed()
       return { success: false, error: 'No available accounts' }
@@ -822,8 +859,9 @@ export class ProxyServer {
       return { success: false, error: msg, statusCode }
     }
 
-    // 追踪账号并发
-    this.accountPool.incrementConcurrency(account.id)
+    // 追踪账号并发（可变引用，callWithRetry 切换账号时会同步更新）
+    const concurrencyRef = { accountId: account.id }
+    this.accountPool.incrementConcurrency(concurrencyRef.accountId)
     let accountConcurrencyTracked = true
     const startTime = Date.now()
 
@@ -832,7 +870,8 @@ export class ProxyServer {
       const { result, account: usedAccount } = await this.callWithRetry(
         account,
         async (acc) => callKiroApi(acc, buildPayload(acc), signal, this.config.preferredEndpoint),
-        '/v1/messages'
+        '/v1/messages',
+        concurrencyRef
       )
 
       // 统一使用 Claude 请求格式估算输入 token（system + tools + user messages）
@@ -849,7 +888,7 @@ export class ProxyServer {
 
       // 用自计算的 input tokens 做 cache 拆分，并限制不超过 200k
       const cacheCalc = splitTokensByRatio(cacheRatio, selfInputTokens)
-      const uncachedInputTokens = capBillingTokens(userOnlyTokens ?? cacheCalc.uncachedTokens, effectiveRequest.model)
+      const uncachedInputTokens = capInputTokens(capBillingTokens(userOnlyTokens ?? cacheCalc.uncachedTokens, effectiveRequest.model))
       const cacheWriteTokens = capBillingTokens(cacheCalc.cacheCreationTokens, effectiveRequest.model)
       const cacheReadTokens = capBillingTokens(cacheCalc.cacheReadTokens, effectiveRequest.model)
       const totalInputTokens = uncachedInputTokens + cacheWriteTokens + cacheReadTokens
@@ -901,8 +940,8 @@ export class ProxyServer {
         outputTokens
       })
 
-      // Bind Sticky Session
-      if (sessionHash) {
+      // Bind Sticky Session（并发满 fallthrough 时不覆盖原映射）
+      if (sessionHash && !stickyFallback) {
         setSessionAccount(sessionHash, usedAccount.id).catch(() => {})
       }
 
@@ -989,7 +1028,7 @@ export class ProxyServer {
       return { success: true, response }
     } catch (error) {
       this.recordRequestFailed()
-      this.accountPool.recordError(account.id, false)
+      this.accountPool.recordError(concurrencyRef.accountId, false)
 
       const statusCode = error instanceof KiroApiError ? error.statusCode : 500
       this.events.onResponse?.({
@@ -1002,7 +1041,7 @@ export class ProxyServer {
       return { success: false, error: (error as Error).message, statusCode }
     } finally {
       if (accountConcurrencyTracked) {
-        this.accountPool.decrementConcurrency(account.id)
+        this.accountPool.decrementConcurrency(concurrencyRef.accountId)
         accountConcurrencyTracked = false
       }
       if (reqId) {
@@ -1047,7 +1086,7 @@ export class ProxyServer {
 
     // 统一账号选择
     const sessionHash = computeSessionHash(effectiveRequest, headers?.['x-session-id'])
-    const account = await this.selectAccount(sessionHash, boundAccountIds)
+    const { account, stickyFallback } = await this.selectAccount(sessionHash, boundAccountIds)
     if (!account) {
       this.recordRequestFailed()
       callbacks.onError(new Error('No available accounts'))
@@ -1191,7 +1230,8 @@ export class ProxyServer {
         userInput,
         topicDetection,
         effectiveRequest.messages,
-        signal
+        signal,
+        stickyFallback
       )
 
       callbacks.onComplete()
@@ -1241,7 +1281,8 @@ export class ProxyServer {
     userInput?: string,
     skipRecording?: boolean,
     messages?: unknown[],
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    stickyFallback?: boolean
   ): Promise<void> {
     const id = msgId || `msg_${uuidv4()}`
     let currentBlockIndex = contentBlockIndex
@@ -1404,7 +1445,7 @@ export class ProxyServer {
           stop_reason: null,
           stop_sequence: null,
           usage: {
-            input_tokens: capBillingTokens(userOnlyTokens ?? estimatedCacheCalc?.uncachedTokens ?? estimatedInputTokens, model),
+            input_tokens: capInputTokens(capBillingTokens(userOnlyTokens ?? estimatedCacheCalc?.uncachedTokens ?? estimatedInputTokens, model)),
             output_tokens: 0,
             cache_creation_input_tokens: capBillingTokens(estimatedCacheCalc?.cacheCreationTokens ?? 0, model),
             cache_read_input_tokens: capBillingTokens(estimatedCacheCalc?.cacheReadTokens ?? 0, model)
@@ -1493,7 +1534,7 @@ export class ProxyServer {
           }
           const cacheWriteTokens = capBillingTokens(cacheCalc?.cacheCreationTokens ?? 0, model)
           const cacheReadTokens = capBillingTokens(cacheCalc?.cacheReadTokens ?? 0, model)
-          const uncachedInputTokens = capBillingTokens(userOnlyTokens ?? cacheCalc?.uncachedTokens ?? estimatedInputTokens, model)
+          const uncachedInputTokens = capInputTokens(capBillingTokens(userOnlyTokens ?? cacheCalc?.uncachedTokens ?? estimatedInputTokens, model))
           const totalInputTokens = uncachedInputTokens + cacheWriteTokens + cacheReadTokens
 
           // logger.info('=== STREAM TOKEN DECISION (completion) ===', {
@@ -1511,8 +1552,8 @@ export class ProxyServer {
           this.recordRequestSuccess()
           this.accountPool.recordSuccess(account.id, totalInputTokens + outputTokens)
 
-          // Bind Sticky Session
-          if (sessionHash) {
+          // Bind Sticky Session（并发满 fallthrough 时不覆盖原映射）
+          if (sessionHash && !stickyFallback) {
             setSessionAccount(sessionHash, account.id).catch(() => {})
           }
 
@@ -1667,7 +1708,8 @@ export class ProxyServer {
                 userInput,     // preserve user input
                 skipRecording, // preserve recording flag
                 messages,      // preserve messages for file logging
-                signal         // propagate abort signal
+                signal,        // propagate abort signal
+                stickyFallback // preserve sticky fallback flag
               )
             } catch (error) {
               logger.error('Claude auto-continue error', { error: (error as Error).message })

@@ -171,17 +171,20 @@ export async function checkHealthAndNotify(): Promise<void> {
     })
   }
 
-  notify({
-    type: 'heartbeat',
-    timestamp: new Date().toISOString(),
-    detail: {
-      uptime: formatUptime(Math.floor(process.uptime())),
-      inflightCount: inflight.length,
-      stuckCount: stuckRequests.length,
-      totalAccounts: accounts.length,
-      availableAccounts: activeAccounts.length,
-      abnormalAccounts: abnormalAccounts.length,
-      abnormalDetails,
-    },
-  }).catch(() => {})
+  // 全部正常时不推送心跳
+  if (hasAbnormalAccounts || hasStuckRequests) {
+    notify({
+      type: 'heartbeat',
+      timestamp: new Date().toISOString(),
+      detail: {
+        uptime: formatUptime(Math.floor(process.uptime())),
+        inflightCount: inflight.length,
+        stuckCount: stuckRequests.length,
+        totalAccounts: accounts.length,
+        availableAccounts: activeAccounts.length,
+        abnormalAccounts: abnormalAccounts.length,
+        abnormalDetails,
+      },
+    }).catch(() => {})
+  }
 }

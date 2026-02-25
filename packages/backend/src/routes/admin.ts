@@ -184,7 +184,9 @@ router.put('/apikeys/:id', async (req: Request, res: Response) => {
     if (boundAccountIds !== undefined) {
       updates.boundAccountIds = Array.isArray(boundAccountIds) ? boundAccountIds : []
     }
-    if (quotaLimit !== undefined) updates.quotaLimit = typeof quotaLimit === 'number' && quotaLimit > 0 ? quotaLimit : undefined
+    if (quotaLimit !== undefined) {
+      updates.quotaLimit = typeof quotaLimit === 'number' && quotaLimit > 0 ? quotaLimit : 0
+    }
 
     const record = await configStore.updateApiKey(id, updates)
     if (!record) {

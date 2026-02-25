@@ -98,9 +98,10 @@ export async function authMiddleware(
     if (totalStats.cost >= record.quotaLimit) {
       logger.warn('API key quota exceeded', { id: record.id, cost: totalStats.cost, limit: record.quotaLimit })
       res.status(429).json({
+        type: 'error',
         error: {
-          message: 'API key quota exceeded',
-          type: 'rate_limit_error'
+          type: 'rate_limit_error',
+          message: `API key quota exceeded. Usage: $${totalStats.cost.toFixed(2)}, Limit: $${record.quotaLimit.toFixed(2)}`
         }
       })
       return
