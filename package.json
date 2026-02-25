@@ -1,6 +1,6 @@
 {
   "name": "kiro-gateway-monorepo",
-  "version": "1.5.0",
+  "version": "1.5.1",
   "private": true,
   "description": "Kiro API Gateway Monorepo",
   "scripts": {

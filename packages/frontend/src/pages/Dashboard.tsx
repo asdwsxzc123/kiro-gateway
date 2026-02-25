@@ -6,6 +6,7 @@ import {
   Clock,
   DollarSign,
   TrendingUp,
+  Link2,
 } from "lucide-react"
 import {
   Card,
@@ -23,7 +24,7 @@ import {
   Tooltip,
   ResponsiveContainer,
 } from "recharts"
-import { getStats, getTodayGlobalCost, getGlobalDailyCosts, getTopAccountsByCost, getTopApiKeysByCost } from "@/api/stats"
+import { getStats, getTodayGlobalCost, getGlobalDailyCosts, getTopAccountsByCost, getTopApiKeysByCost, getSessionStats } from "@/api/stats"
 import { getAccounts } from "@/api/accounts"
 import { getLogsSummary } from "@/api/logs"
 
@@ -101,6 +102,13 @@ export function Dashboard() {
     refetchInterval: 30 * 1000, // 30秒自动刷新
   })
 
+  // 获取 Session 统计
+  const { data: sessionStats } = useQuery({
+    queryKey: ["sessionStats"],
+    queryFn: getSessionStats,
+    refetchInterval: 30 * 1000, // 30秒自动刷新
+  })
+
   // 计算成功率
   const successRate = stats?.global
     ? stats.global.totalRequests > 0
@@ -139,6 +147,12 @@ export function Dashboard() {
       value: formatCost(todayGlobalCost),
       icon: DollarSign,
       description: "今日全局费用总额",
+    },
+    {
+      title: "活跃会话",
+      value: sessionStats?.totalSessions ?? 0,
+      icon: Link2,
+      description: "当前活跃的 Session 数量",
     },
   ]
 

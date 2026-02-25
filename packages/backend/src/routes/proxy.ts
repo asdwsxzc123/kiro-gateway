@@ -203,7 +203,7 @@ router.post('/messages', async (req: Request, res: Response) => {
 
   const isStream = request.stream === true
 
-  logger.info('Claude request received', {
+  logger.debug('Claude request received', {
     model: request.model,
     stream: isStream,
     messagesCount: request.messages.length,

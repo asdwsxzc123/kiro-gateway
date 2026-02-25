@@ -41,7 +41,7 @@ import * as apiKeyStore from '../storage/apiKeyStore.js'
 import { calculateCost } from './pricing.js'
 import { calculateCacheRatio, splitTokensByRatio, estimateUserOnlyTokens, estimateRequestWeight, extractUserInputText } from './cacheTracker.js'
 import type { CacheRatio, CacheCalculation } from './cacheTracker.js'
-import { computeSessionHash, getSessionAccount, setSessionAccount } from './sessionCache.js'
+import { computeSessionHash, getSessionAccount, setSessionAccount, extendSessionTTL, deleteSessionAccount } from './sessionCache.js'
 import { RequestQueue } from './requestQueue.js'
 
 const logger = createLogger('ProxyServer')
@@ -398,7 +398,7 @@ export class ProxyServer {
   ): Promise<ProxyAccount | null> {
     let account: ProxyAccount | null = null
 
-    // 1. 粘性会话绑定
+    // 1. 粘性会话绑定（带智能续期和验证）
     if (sessionHash) {
       const stickyAccountId = await getSessionAccount(sessionHash)
       if (stickyAccountId) {
@@ -406,8 +406,25 @@ export class ProxyServer {
         if (inBoundList) {
           account = this.accountPool.getAccountIfAvailable(stickyAccountId)
           if (account) {
-            logger.debug('Using sticky session account', { accountId: account.id })
+            // 🚀 智能续期：剩余时间低于阈值时自动续期
+            await extendSessionTTL(sessionHash)
+            logger.debug('Using sticky session account', { accountId: account.id, sessionHash })
+          } else {
+            // 账号不可用（cooldown/error/paused），删除会话映射
+            logger.warn('Sticky session account unavailable, clearing mapping', {
+              accountId: stickyAccountId,
+              sessionHash
+            })
+            await deleteSessionAccount(sessionHash)
           }
+        } else {
+          // 账号不在绑定列表中，删除会话映射
+          logger.warn('Sticky session account not in bound list, clearing mapping', {
+            accountId: stickyAccountId,
+            sessionHash,
+            boundList: boundAccountIds
+          })
+          await deleteSessionAccount(sessionHash)
         }
       }
     }
@@ -418,30 +435,6 @@ export class ProxyServer {
         account = this.accountPool.getNextAccountFromSubset(boundAccountIds)
       } else {
         account = this.accountPool.getNextAccount()
-      }
-    }
-
-    // 池非空但选不到账号时，短暂等待后重试（单账号场景下 cooldown/refresh 是瞬态的）
-    if (!account && this.accountPool.getPoolSize() > 0) {
-      const maxWaitMs = 5000
-      const intervalMs = 500
-      let waited = 0
-      logger.info('All accounts temporarily unavailable, waiting for recovery', {
-        poolSize: this.accountPool.getPoolSize(),
-        bound: boundAccountIds?.length ?? 0
-      })
-      while (waited < maxWaitMs) {
-        await new Promise(resolve => setTimeout(resolve, intervalMs))
-        waited += intervalMs
-        if (boundAccountIds && boundAccountIds.length > 0) {
-          account = this.accountPool.getNextAccountFromSubset(boundAccountIds)
-        } else {
-          account = this.accountPool.getNextAccount()
-        }
-        if (account) break
-      }
-      if (account) {
-        logger.info('Account recovered after wait', { accountId: account.id, waitedMs: waited })
       }
     }
 
@@ -611,6 +604,54 @@ export class ProxyServer {
     return 0
   }
 
+  /**
+   * 将错误统一归类，优先使用 KiroApiError 的结构化字段，fallback 到消息匹配
+   */
+  private classifyRetryError(error: Error): {
+    kind: 'monthly_limit' | 'account_suspended' | 'auth_error' | 'quota_exhausted' | 'overloaded' | 'server_error' | 'unknown'
+    retryable: boolean
+  } {
+    if (error instanceof KiroApiError) {
+      switch (error.errorCode) {
+        case 'MONTHLY_LIMIT':
+          return { kind: 'monthly_limit', retryable: false }
+        case 'ACCOUNT_SUSPENDED':
+          return { kind: 'account_suspended', retryable: false }
+        case 'AUTH_ERROR':
+          return { kind: 'auth_error', retryable: false }
+        case 'QUOTA_EXHAUSTED':
+          return { kind: 'quota_exhausted', retryable: true }
+        case 'OVERLOADED':
+          return { kind: 'overloaded', retryable: true }
+        case 'SERVER_ERROR':
+          return { kind: 'server_error', retryable: true }
+        default:
+          return { kind: 'unknown', retryable: error.retryable }
+      }
+    }
+
+    const msg = error.message.toLowerCase()
+    if (msg.includes('monthly_request_count') || msg.includes('402')) {
+      return { kind: 'monthly_limit', retryable: false }
+    }
+    if (msg.includes('temporarily_suspended') || msg.includes('temporarily is suspended')) {
+      return { kind: 'account_suspended', retryable: false }
+    }
+    if (msg.includes('401') || msg.includes('403') || msg.includes('auth error')) {
+      return { kind: 'auth_error', retryable: false }
+    }
+    if (msg.includes('429') || msg.includes('quota')) {
+      return { kind: 'quota_exhausted', retryable: true }
+    }
+    if (msg.includes('529') || msg.includes('overloaded')) {
+      return { kind: 'overloaded', retryable: true }
+    }
+    if (msg.includes('500') || msg.includes('502') || msg.includes('503')) {
+      return { kind: 'server_error', retryable: true }
+    }
+    return { kind: 'unknown', retryable: false }
+  }
+
   private async callWithRetry<T>(
     account: ProxyAccount,
     apiCall: (acc: ProxyAccount) => Promise<T>,
@@ -627,94 +668,95 @@ export class ProxyServer {
       } catch (error) {
         lastError = error as Error
         const errorMsg = lastError.message
+        const errorType = this.classifyRetryError(lastError)
+        const hasMoreAttempts = attempt < maxRetries - 1
 
         logger.warn(`API call failed (attempt ${attempt + 1}/${maxRetries})`, {
           accountId: currentAccount.id,
-          error: errorMsg
+          error: errorMsg,
+          kind: errorType.kind
         })
 
-        // 402: 月度用量耗尽，自动暂停并切换账号
-        if (errorMsg.includes('402') || errorMsg.includes('MONTHLY_REQUEST_COUNT')) {
-          this.accountPool.setStatus(currentAccount.id, 'paused', '月度用量耗尽 (402)')
-          accountStore.updateAccount(currentAccount.id, { status: 'paused', statusReason: '月度用量耗尽 (402)' }).catch(() => {})
-          logger.warn('Account auto-paused due to monthly limit', { accountId: currentAccount.id })
-          const nextAccount = this.accountPool.getNextAvailableAccount(currentAccount.id)
-          if (nextAccount) {
-            currentAccount = nextAccount
-            continue
-          }
-          break
-        }
-
-        // 检测账号被封禁（TEMPORARILY_SUSPENDED）
-        if (errorMsg.includes('TEMPORARILY_SUSPENDED') || errorMsg.includes('temporarily is suspended')) {
-          this.accountPool.setStatus(currentAccount.id, 'suspended', '账号被封禁 (TEMPORARILY_SUSPENDED)')
-          accountStore.updateAccount(currentAccount.id, { status: 'suspended', statusReason: '账号被封禁 (TEMPORARILY_SUSPENDED)' }).catch(() => {})
-          logger.warn('Account suspended (banned by Kiro), switching account', { accountId: currentAccount.id })
-          const nextAccount = this.accountPool.getNextAvailableAccount(currentAccount.id)
-          if (nextAccount) {
-            currentAccount = nextAccount
-            continue
-          }
-          break
-        }
-
-        // 401/403: Token 过期，尝试刷新
-        if (errorMsg.includes('401') || errorMsg.includes('403')) {
-          const refreshed = await this.refreshToken(currentAccount)
-          if (refreshed) {
-            const updatedAccount = this.accountPool.getAccount(currentAccount.id)
-            if (updatedAccount) {
-              currentAccount = updatedAccount
-              continue
-            }
-          }
-        }
-
-        // 429: 配额耗尽，切换账号
-        if (errorMsg.includes('429') || errorMsg.includes('quota')) {
-          const cooldownMs = this.getErrorCooldownMs(lastError!)
-          this.accountPool.recordErrorWithType(currentAccount.id, 'QUOTA_EXHAUSTED', cooldownMs)
-
-          if (this.config.autoSwitchOnQuotaExhausted) {
+        switch (errorType.kind) {
+          case 'monthly_limit': {
+            this.accountPool.setStatus(currentAccount.id, 'paused', '月度用量耗尽 (402)')
+            accountStore.updateAccount(currentAccount.id, { status: 'paused', statusReason: '月度用量耗尽 (402)' }).catch(() => {})
+            logger.warn('Account auto-paused due to monthly limit', { accountId: currentAccount.id })
             const nextAccount = this.accountPool.getNextAvailableAccount(currentAccount.id)
-            if (nextAccount) {
-              logger.info('Switching to next account due to quota', {
-                from: currentAccount.id,
-                to: nextAccount.id
-              })
+            if (nextAccount && hasMoreAttempts) {
               currentAccount = nextAccount
               continue
             }
+            break
+          }
+          case 'account_suspended': {
+            this.accountPool.setStatus(currentAccount.id, 'suspended', '账号被封禁 (TEMPORARILY_SUSPENDED)')
+            accountStore.updateAccount(currentAccount.id, { status: 'suspended', statusReason: '账号被封禁 (TEMPORARILY_SUSPENDED)' }).catch(() => {})
+            logger.warn('Account suspended (banned by Kiro), switching account', { accountId: currentAccount.id })
+            const nextAccount = this.accountPool.getNextAvailableAccount(currentAccount.id)
+            if (nextAccount && hasMoreAttempts) {
+              currentAccount = nextAccount
+              continue
+            }
+            break
+          }
+          case 'auth_error': {
+            const refreshed = await this.refreshToken(currentAccount)
+            if (refreshed) {
+              const updatedAccount = this.accountPool.getAccount(currentAccount.id)
+              if (updatedAccount && hasMoreAttempts) {
+                currentAccount = updatedAccount
+                continue
+              }
+            }
+            break
+          }
+          case 'quota_exhausted': {
+            const cooldownMs = this.getErrorCooldownMs(lastError)
+            this.accountPool.recordErrorWithType(currentAccount.id, 'QUOTA_EXHAUSTED', cooldownMs)
+            if (this.config.autoSwitchOnQuotaExhausted) {
+              const nextAccount = this.accountPool.getNextAvailableAccount(currentAccount.id)
+              if (nextAccount && hasMoreAttempts) {
+                logger.info('Switching to next account due to quota', {
+                  from: currentAccount.id,
+                  to: nextAccount.id
+                })
+                currentAccount = nextAccount
+                continue
+              }
+            }
+            break
+          }
+          case 'overloaded': {
+            if (!hasMoreAttempts) break
+            const cooldownMs529 = this.getErrorCooldownMs(lastError)
+            this.accountPool.recordErrorWithType(currentAccount.id, 'OVERLOADED', cooldownMs529)
+            const baseDelay = this.config.retryDelayMs * Math.pow(2, attempt + 2)
+            const jitter = baseDelay * (0.8 + Math.random() * 0.4)
+            await new Promise(resolve => setTimeout(resolve, jitter))
+            const nextAccount = this.accountPool.getNextAvailableAccount(currentAccount.id)
+            if (nextAccount) {
+              currentAccount = nextAccount
+            }
+            continue
+          }
+          case 'server_error': {
+            if (!hasMoreAttempts) break
+            const baseDelay = this.config.retryDelayMs * Math.pow(2, attempt)
+            const jitter = baseDelay * (0.8 + Math.random() * 0.4)
+            await new Promise(resolve => setTimeout(resolve, jitter))
+            continue
+          }
+          case 'unknown':
+          default: {
+            this.accountPool.recordError(currentAccount.id, false)
+            break
           }
         }
 
-        // 529: 服务过载，较长退避 + jitter
-        if (errorMsg.includes('529') || errorMsg.includes('overloaded')) {
-          const cooldownMs529 = this.getErrorCooldownMs(lastError!)
-          this.accountPool.recordErrorWithType(currentAccount.id, 'OVERLOADED', cooldownMs529)
-          const baseDelay = this.config.retryDelayMs * Math.pow(2, attempt + 2)  // start higher for overload
-          const jitter = baseDelay * (0.8 + Math.random() * 0.4)
-          await new Promise(resolve => setTimeout(resolve, jitter))
-
-          // Try switching to a different account for overload
-          const nextAccount = this.accountPool.getNextAvailableAccount(currentAccount.id)
-          if (nextAccount) {
-            currentAccount = nextAccount
-          }
-          continue
+        if (!errorType.retryable || !hasMoreAttempts) {
+          break
         }
-
-        // 5xx: 服务器错误，指数退避 + jitter 重试
-        if (errorMsg.includes('500') || errorMsg.includes('502') || errorMsg.includes('503')) {
-          const baseDelay = this.config.retryDelayMs * Math.pow(2, attempt)
-          const jitter = baseDelay * (0.8 + Math.random() * 0.4)  // ±20% jitter
-          await new Promise(resolve => setTimeout(resolve, jitter))
-          continue
-        }
-
-        // 其他错误，记录并继续
-        this.accountPool.recordError(currentAccount.id, false)
       }
     }
 
@@ -729,27 +771,7 @@ export class ProxyServer {
     boundAccountIds?: string[],
     signal?: AbortSignal
   ): Promise<{ success: boolean; response?: unknown; error?: string; statusCode?: number }> {
-    let release: (() => void) | undefined
-    const reqId = uuidv4()
-    try {
-      release = await this.requestQueue.acquire(signal)
-      this.inflightRequests.set(reqId, {
-        id: reqId,
-        startTime: Date.now(),
-        model: request.model || 'unknown',
-      })
-      return await this._handleClaudeRequest(request, _headers, boundAccountIds, signal)
-    } catch (error) {
-      if (!release) {
-        // Queue full or timeout — not yet acquired
-        const statusCode = error instanceof KiroApiError ? error.statusCode : 500
-        return { success: false, error: (error as Error).message, statusCode }
-      }
-      throw error
-    } finally {
-      this.inflightRequests.delete(reqId)
-      release?.()
-    }
+    return this._handleClaudeRequest(request, _headers, boundAccountIds, signal)
   }
 
   private async _handleClaudeRequest(
@@ -783,8 +805,24 @@ export class ProxyServer {
       return { success: false, error: 'No available accounts' }
     }
 
+    let release: (() => void) | undefined
+    let reqId: string | undefined
+    try {
+      release = await this.requestQueue.acquire(signal)
+      reqId = uuidv4()
+      this.inflightRequests.set(reqId, {
+        id: reqId,
+        startTime: Date.now(),
+        model: effectiveRequest.model || 'unknown',
+      })
+    } catch (error) {
+      const statusCode = error instanceof KiroApiError ? error.statusCode : 500
+      return { success: false, error: (error as Error).message, statusCode }
+    }
+
     // 追踪账号并发
     this.accountPool.incrementConcurrency(account.id)
+    let accountConcurrencyTracked = true
     const startTime = Date.now()
 
     try {
@@ -956,7 +994,14 @@ export class ProxyServer {
 
       return { success: false, error: (error as Error).message, statusCode }
     } finally {
-      this.accountPool.decrementConcurrency(account.id)
+      if (accountConcurrencyTracked) {
+        this.accountPool.decrementConcurrency(account.id)
+        accountConcurrencyTracked = false
+      }
+      if (reqId) {
+        this.inflightRequests.delete(reqId)
+      }
+      release?.()
     }
   }
 
@@ -974,27 +1019,7 @@ export class ProxyServer {
     boundAccountIds?: string[],
     signal?: AbortSignal
   ): Promise<void> {
-    let release: (() => void) | undefined
-    const reqId = uuidv4()
-    try {
-      release = await this.requestQueue.acquire(signal)
-      this.inflightRequests.set(reqId, {
-        id: reqId,
-        startTime: Date.now(),
-        model: request.model || 'unknown',
-      })
-      await this._handleClaudeStreamRequest(request, callbacks, headers, matchedApiKey, boundAccountIds, signal)
-    } catch (error) {
-      if (!release) {
-        // Queue full or timeout — not yet acquired
-        callbacks.onError(error as Error)
-        return
-      }
-      throw error
-    } finally {
-      this.inflightRequests.delete(reqId)
-      release?.()
-    }
+    await this._handleClaudeStreamRequest(request, callbacks, headers, matchedApiKey, boundAccountIds, signal)
   }
 
   private async _handleClaudeStreamRequest(
@@ -1022,8 +1047,24 @@ export class ProxyServer {
       return
     }
 
+    let release: (() => void) | undefined
+    let reqId: string | undefined
+    try {
+      release = await this.requestQueue.acquire(signal)
+      reqId = uuidv4()
+      this.inflightRequests.set(reqId, {
+        id: reqId,
+        startTime: Date.now(),
+        model: effectiveRequest.model || 'unknown',
+      })
+    } catch (error) {
+      callbacks.onError(error as Error)
+      return
+    }
+
     // 追踪账号并发
     this.accountPool.incrementConcurrency(account.id)
+    let accountConcurrencyTracked = true
     const startTime = Date.now()
 
     // 检查是否为 WebSearch 请求，完全绕过 Kiro generateAssistantResponse
@@ -1034,7 +1075,14 @@ export class ProxyServer {
       } catch (error) {
         callbacks.onError(error as Error)
       } finally {
-        this.accountPool.decrementConcurrency(account.id)
+        if (accountConcurrencyTracked) {
+          this.accountPool.decrementConcurrency(account.id)
+          accountConcurrencyTracked = false
+        }
+        if (reqId) {
+          this.inflightRequests.delete(reqId)
+        }
+        release?.()
       }
       return
     }
@@ -1151,7 +1199,14 @@ export class ProxyServer {
 
       callbacks.onError(error as Error)
     } finally {
-      this.accountPool.decrementConcurrency(account.id)
+      if (accountConcurrencyTracked) {
+        this.accountPool.decrementConcurrency(account.id)
+        accountConcurrencyTracked = false
+      }
+      if (reqId) {
+        this.inflightRequests.delete(reqId)
+      }
+      release?.()
     }
   }
 

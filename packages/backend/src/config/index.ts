@@ -10,7 +10,8 @@ import {
   DEFAULT_PROXY_CONFIG,
   DEFAULT_RATE_LIMIT_CONFIG,
   DEFAULT_LOG_CONFIG,
-  DEFAULT_ACCOUNT_POOL_CONFIG
+  DEFAULT_ACCOUNT_POOL_CONFIG,
+  DEFAULT_SESSION_CONFIG
 } from './defaults.js'
 
 // 加载 .env 文件
@@ -84,6 +85,14 @@ export interface AccountPoolConfig {
   quotaResetMs: number
 }
 
+// Session 粘性配置
+export interface SessionConfig {
+  enabled: boolean
+  ttlSeconds: number
+  renewalThresholdSeconds: number
+  enableCacheControl: boolean
+}
+
 // 完整配置
 export interface Config {
   server: ServerConfig
@@ -93,6 +102,7 @@ export interface Config {
   rateLimit: RateLimitConfig
   log: LogConfig
   accountPool: AccountPoolConfig
+  session: SessionConfig
   jwt: JwtConfig
   admin: AdminConfig
 }
@@ -143,6 +153,12 @@ export function loadConfig(): Config {
       cooldownMs: DEFAULT_ACCOUNT_POOL_CONFIG.cooldownMs,
       maxErrorCount: DEFAULT_ACCOUNT_POOL_CONFIG.maxErrorCount,
       quotaResetMs: DEFAULT_ACCOUNT_POOL_CONFIG.quotaResetMs
+    },
+    session: {
+      enabled: process.env.SESSION_ENABLED !== 'false',
+      ttlSeconds: parseInt(process.env.SESSION_TTL_SECONDS || String(DEFAULT_SESSION_CONFIG.ttlSeconds), 10),
+      renewalThresholdSeconds: parseInt(process.env.SESSION_RENEWAL_THRESHOLD_SECONDS || String(DEFAULT_SESSION_CONFIG.renewalThresholdSeconds), 10),
+      enableCacheControl: process.env.SESSION_ENABLE_CACHE_CONTROL !== 'false'
     },
     jwt: {
       secret: process.env.JWT_SECRET || 'default-jwt-secret-change-in-production',

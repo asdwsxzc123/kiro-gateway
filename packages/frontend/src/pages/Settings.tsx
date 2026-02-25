@@ -105,7 +105,7 @@ export function Settings() {
 
   // 格式化费用显示
   const formatCost = (cost: number): string => {
-    return `$${cost.toFixed(4)}`
+    return `$${cost.toFixed(3)}`
   }
 
   // 获取 API Key 的费用数据
@@ -411,6 +411,7 @@ export function Settings() {
           <TabsTrigger value="ratelimit">限流配置</TabsTrigger>
           <TabsTrigger value="token">Token刷新</TabsTrigger>
           <TabsTrigger value="pool">账号池</TabsTrigger>
+          <TabsTrigger value="session">Session粘性</TabsTrigger>
           <TabsTrigger value="advanced">高级配置</TabsTrigger>
           <TabsTrigger value="password">修改密码</TabsTrigger>
         </TabsList>
@@ -1330,6 +1331,123 @@ export function Settings() {
 
               <Button
                 onClick={savePoolConfig}
+                disabled={updateMutation.isPending}
+              >
+                <Save className="mr-2 h-4 w-4" />
+                {updateMutation.isPending ? "保存中..." : "保存配置"}
+              </Button>
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        {/* Session 粘性配置 */}
+        <TabsContent value="session">
+          <Card>
+            <CardHeader>
+              <CardTitle>Session 粘性配置</CardTitle>
+              <CardDescription>
+                配置会话粘性功能，确保同一会话路由到同一账号，提升缓存命中率
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-6">
+              {/* 开关配置 */}
+              <div className="flex items-center justify-between">
+                <div className="space-y-0.5">
+                  <Label>启用 Session 粘性</Label>
+                  <p className="text-sm text-muted-foreground">
+                    同一会话的请求将路由到同一账号，提升 Prompt Caching 命中率
+                  </p>
+                </div>
+                <Switch
+                  checked={localConfig.sessionEnabled ?? config?.sessionEnabled ?? true}
+                  onCheckedChange={(checked) =>
+                    setLocalConfig({ ...localConfig, sessionEnabled: checked })
+                  }
+                />
+              </div>
+
+              {/* TTL 配置 */}
+              <div className="grid gap-4 md:grid-cols-2">
+                <div className="space-y-2">
+                  <Label htmlFor="sessionTtlSeconds">Session TTL (秒)</Label>
+                  <Input
+                    id="sessionTtlSeconds"
+                    type="number"
+                    min={60}
+                    max={86400}
+                    value={localConfig.sessionTtlSeconds ?? config?.sessionTtlSeconds ?? 3600}
+                    onChange={(e) =>
+                      setLocalConfig({
+                        ...localConfig,
+                        sessionTtlSeconds: parseInt(e.target.value),
+                      })
+                    }
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    会话映射的过期时间，默认 3600 秒 (1小时)
+                  </p>
+                </div>
+
+                <div className="space-y-2">
+                  <Label htmlFor="sessionRenewalThreshold">续期阈值 (秒)</Label>
+                  <Input
+                    id="sessionRenewalThreshold"
+                    type="number"
+                    min={0}
+                    max={3600}
+                    value={localConfig.sessionRenewalThresholdSeconds ?? config?.sessionRenewalThresholdSeconds ?? 300}
+                    onChange={(e) =>
+                      setLocalConfig({
+                        ...localConfig,
+                        sessionRenewalThresholdSeconds: parseInt(e.target.value),
+                      })
+                    }
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    剩余时间低于此值时自动续期，默认 300 秒 (5分钟)，设为 0 禁用续期
+                  </p>
+                </div>
+              </div>
+
+              {/* Cache Control 支持 */}
+              <div className="flex items-center justify-between">
+                <div className="space-y-0.5">
+                  <Label>支持 Cache Control 标记</Label>
+                  <p className="text-sm text-muted-foreground">
+                    使用带 cache_control 标记的内容作为 session 标识
+                  </p>
+                </div>
+                <Switch
+                  checked={localConfig.sessionEnableCacheControl ?? config?.sessionEnableCacheControl ?? true}
+                  onCheckedChange={(checked) =>
+                    setLocalConfig({ ...localConfig, sessionEnableCacheControl: checked })
+                  }
+                />
+              </div>
+
+              {/* Session Hash 生成策略说明 */}
+              <div className="border-t pt-6">
+                <h4 className="text-sm font-semibold mb-4">Session Hash 生成策略</h4>
+                <div className="space-y-2 text-sm text-muted-foreground">
+                  <p>系统会按以下优先级生成 session hash：</p>
+                  <ol className="list-decimal list-inside space-y-1 ml-2">
+                    <li><strong>x-session-id header</strong> - 客户端提供的会话 ID（最高优先级）</li>
+                    <li><strong>cache_control 内容</strong> - 带 ephemeral 标记的内容哈希</li>
+                    <li><strong>system prompt</strong> - 系统提示词哈希</li>
+                    <li><strong>首条消息</strong> - 第一条用户消息哈希（最后 fallback）</li>
+                  </ol>
+                </div>
+              </div>
+
+              <Button
+                onClick={() => {
+                  updateMutation.mutate({
+                    sessionEnabled: localConfig.sessionEnabled ?? config?.sessionEnabled,
+                    sessionTtlSeconds: localConfig.sessionTtlSeconds ?? config?.sessionTtlSeconds,
+                    sessionRenewalThresholdSeconds: localConfig.sessionRenewalThresholdSeconds ?? config?.sessionRenewalThresholdSeconds,
+                    sessionEnableCacheControl: localConfig.sessionEnableCacheControl ?? config?.sessionEnableCacheControl,
+                  })
+                }}
                 disabled={updateMutation.isPending}
               >
                 <Save className="mr-2 h-4 w-4" />
