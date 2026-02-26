@@ -33,7 +33,8 @@ function getHttpStatusFromError(error: Error): number {
   if (msg.includes('429') || msg.includes('quota')) return 429
   if (msg.includes('529') || msg.includes('overloaded') || msg.includes('Too many concurrent')) return 502
   if (msg.includes('402') || msg.includes('MONTHLY_REQUEST_COUNT')) return 402
-  if (msg.includes('No available accounts')) return 503
+  if (msg.includes('No available accounts')) return 403
+  if (msg.includes('All accounts at concurrency limit')) return 503
   return 500
 }
 
@@ -84,8 +85,13 @@ function computeRetryAfter(statusCode: number, errorKindOrError?: string | Error
     return Math.max(2, Math.min(30, Math.ceil(utilization * 10)))
   }
 
+  if (statusCode === 403) {
+    // 无 active 账号：固定 30s
+    return 30
+  }
+
   if (statusCode === 503) {
-    // 无可用账号：固定 30s
+    // 并发满：固定 30s
     return 30
   }
 
@@ -105,7 +111,7 @@ function checkOverload(): { reject: boolean; reason?: string; statusCode?: numbe
 
   const availableCount = proxyServer.getAvailableAccountCount()
   if (availableCount === 0) {
-    return { reject: true, reason: 'No available accounts', statusCode: 503 }
+    return { reject: true, reason: 'No available accounts', statusCode: 403 }
   }
 
   // 队列深度超过上限的 2 倍：过载拒绝

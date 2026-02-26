@@ -146,7 +146,7 @@ export function EditAccountDialog({ open, onOpenChange, account }: EditAccountDi
       refreshToken: editForm.refreshToken || undefined,
       clientId: editForm.clientId || undefined,
       clientSecret: editForm.clientSecret || undefined,
-      maxConcurrency: editForm.maxConcurrency || undefined,
+      maxConcurrency: editForm.maxConcurrency ?? undefined,
       proxyUrl: editForm.proxyUrl,
     }
 

@@ -1,6 +1,6 @@
 import { useState } from "react"
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
-import { Plus, Trash2, RefreshCw, TestTube, Pencil, BarChart3, Fingerprint, ArrowUpDown, Pause, Play, Download, Copy, XCircle, FlaskConical } from "lucide-react"
+import { Plus, Trash2, RefreshCw, TestTube, Pencil, BarChart3, Fingerprint, ArrowUpDown, Pause, Play, Download, Copy, XCircle, FlaskConical, Settings2 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import {
   Card,
@@ -35,15 +35,17 @@ import type { Account, AccountUsage } from "@kiro-gateway/shared"
 import type { AccountCostData } from "@/api/stats"
 import { AddAccountDialog } from "@/components/accounts/AddAccountDialog"
 import { EditAccountDialog } from "@/components/accounts/EditAccountDialog"
+import { BatchConcurrencyDialog } from "@/components/accounts/BatchConcurrencyDialog"
 
 /**
  * Accounts 页面 - 账号管理
  * 支持添加、删除、刷新 Token 等操作
  */
 export function Accounts() {
-  const defaultBatchImportConcurrency = 8
+  const defaultBatchImportConcurrency = 0
   const [isAddDialogOpen, setIsAddDialogOpen] = useState(false)
   const [isEditDialogOpen, setIsEditDialogOpen] = useState(false)
+  const [isBatchConcurrencyOpen, setIsBatchConcurrencyOpen] = useState(false)
   const [editingAccount, setEditingAccount] = useState<Account | null>(null)
   const [sortBy, setSortBy] = useState<"email" | "todayCost" | "totalCost">("email")
   const [sortOrder, setSortOrder] = useState<"asc" | "desc">("asc")
@@ -467,6 +469,12 @@ export function Accounts() {
         </div>
 
         <div className="flex gap-2">
+          {/* 批量修改并发 */}
+          <Button variant="outline" onClick={() => setIsBatchConcurrencyOpen(true)} disabled={!accounts?.length}>
+            <Settings2 className="mr-2 h-4 w-4" />
+            批量并发
+          </Button>
+
           {/* 批量刷新 Token */}
           <Button variant="outline" onClick={handleBatchRefresh} disabled={!!batchRefreshProgress || !accounts?.length}>
             <RefreshCw className="mr-2 h-4 w-4" />
@@ -523,6 +531,13 @@ export function Accounts() {
         open={isEditDialogOpen}
         onOpenChange={setIsEditDialogOpen}
         account={editingAccount}
+      />
+
+      {/* 批量修改并发数对话框 */}
+      <BatchConcurrencyDialog
+        open={isBatchConcurrencyOpen}
+        onOpenChange={setIsBatchConcurrencyOpen}
+        accountCount={accounts?.length ?? 0}
       />
 
       {/* 账号列表 */}

@@ -93,13 +93,14 @@ interface AddAccountDialogProps {
 export function AddAccountDialog({
   open,
   onOpenChange,
-  defaultBatchImportConcurrency = 10,
+  defaultBatchImportConcurrency = 0,
 }: AddAccountDialogProps) {
   const [importMode, setImportMode] = useState<ImportMode>("oidc")
   const [oidcForm, setOidcForm] = useState<OidcFormData>(initialOidcForm)
   const [ssoForm, setSsoForm] = useState<SsoFormData>(initialSsoForm)
   const [oidcBatchInput, setOidcBatchInput] = useState("")
   const [manualForm, setManualForm] = useState<AddAccountRequest>(initialManualForm)
+  const [isBatchImporting, setIsBatchImporting] = useState(false)
 
   const { toast } = useToast()
   const queryClient = useQueryClient()
@@ -130,7 +131,8 @@ export function AddAccountDialog({
   const runBatchImport = async (requests: AddAccountRequest[]) => {
     if (requests.length === 0) return
 
-    const concurrency = Math.max(1, defaultBatchImportConcurrency)
+    setIsBatchImporting(true)
+    const concurrency = Math.max(1, defaultBatchImportConcurrency || 8)
     const workerCount = Math.min(concurrency, requests.length)
     let nextIndex = 0
     let success = 0
@@ -152,6 +154,8 @@ export function AddAccountDialog({
 
     await Promise.all(Array.from({ length: workerCount }, () => worker()))
     queryClient.invalidateQueries({ queryKey: ["accounts"] })
+
+    setIsBatchImporting(false)
 
     if (errors.length === 0) {
       onOpenChange(false)
@@ -240,8 +244,8 @@ export function AddAccountDialog({
     // 优先尝试 JSON 格式解析
     const jsonAccounts = parseJsonAccounts(text)
     if (jsonAccounts) {
-      // JSON 单条记录时自动填充表单
       if (jsonAccounts.length === 1) {
+        // JSON 单条记录时自动填充表单
         const item = jsonAccounts[0]
         setOidcForm({
           ...oidcForm,
@@ -252,6 +256,12 @@ export function AddAccountDialog({
           clientSecret: item.clientSecret || "",
           region: item.region || "us-east-1",
         })
+      } else {
+        // 多条记录时取第一条的 region 填充到表单
+        const firstRegion = jsonAccounts[0]?.region
+        if (firstRegion) {
+          setOidcForm((prev) => ({ ...prev, region: firstRegion }))
+        }
       }
       return
     }
@@ -923,9 +933,9 @@ export function AddAccountDialog({
           </Button>
           <Button
             onClick={handleAddAccount}
-            disabled={addMutation.isPending}
+            disabled={addMutation.isPending || isBatchImporting}
           >
-            {addMutation.isPending ? "添加中..." : "添加"}
+            {isBatchImporting ? "导入中..." : addMutation.isPending ? "添加中..." : "添加"}
           </Button>
         </DialogFooter>
       </DialogContent>
