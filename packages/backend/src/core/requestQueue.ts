@@ -26,11 +26,24 @@ interface QueueEntry {
   enqueuedAt: number
 }
 
+export interface QueueStats {
+  totalAcquired: number
+  totalRejected: number
+  rejectReasons: Record<string, number>  // queue_full | timeout | aborted | overloaded
+  waitTimeSamples: number[]              // 最近 100 个等待时间（ms）
+}
+
 export class RequestQueue {
   private config: RequestQueueConfig
   private queue: QueueEntry[] = []
   private activeCount: number = 0
   private maxConcurrent: number
+  private stats: QueueStats = {
+    totalAcquired: 0,
+    totalRejected: 0,
+    rejectReasons: {},
+    waitTimeSamples: []
+  }
 
   constructor(maxConcurrent: number, config?: Partial<RequestQueueConfig>) {
     this.maxConcurrent = maxConcurrent
@@ -45,10 +58,17 @@ export class RequestQueue {
    * 更新配置
    */
   updateConfig(maxConcurrent: number, config?: Partial<RequestQueueConfig>): void {
+    const wasLimited = this.maxConcurrent > 0
     this.maxConcurrent = maxConcurrent
     if (config?.enabled !== undefined) this.config.enabled = config.enabled
     if (config?.maxSize !== undefined) this.config.maxSize = config.maxSize
     if (config?.timeoutMs !== undefined) this.config.timeoutMs = config.timeoutMs
+
+    // 从有限切到无限制：放行所有排队请求
+    if (wasLimited && this.maxConcurrent <= 0 && this.queue.length > 0) {
+      logger.info('Switching to unlimited mode, draining queue', { queued: this.queue.length })
+      this.drainQueue()
+    }
   }
 
   /**
@@ -64,14 +84,29 @@ export class RequestQueue {
   }
 
   /**
+   * 获取统计指标（可观测性）
+   */
+  getStats(): QueueStats {
+    return { ...this.stats, rejectReasons: { ...this.stats.rejectReasons }, waitTimeSamples: [...this.stats.waitTimeSamples] }
+  }
+
+  /**
    * 请求进入：如果有空位直接执行，否则排队等待
    * 返回一个 release 函数，请求完成后必须调用
    * @param signal 可选的 AbortSignal，客户端断开时取消排队
    */
   async acquire(signal?: AbortSignal): Promise<() => void> {
+    // 无限制模式：maxConcurrent <= 0 时直接放行，仅追踪活跃计数
+    if (this.maxConcurrent <= 0) {
+      this.activeCount++
+      this.recordAcquired()
+      return () => this.release()
+    }
+
     // 有空位，直接获取（无论是否启用排队）
     if (this.activeCount < this.maxConcurrent) {
       this.activeCount++
+      this.recordAcquired()
       return () => this.release()
     }
 
@@ -81,6 +116,7 @@ export class RequestQueue {
         active: this.activeCount,
         maxConcurrent: this.maxConcurrent
       })
+      this.recordRejected('overloaded')
       throw new Error('Too many concurrent requests (502 overloaded)')
     }
 
@@ -91,11 +127,13 @@ export class RequestQueue {
         maxSize: this.config.maxSize,
         active: this.activeCount
       })
+      this.recordRejected('queue_full')
       throw new Error('Too many concurrent requests, queue full (502 overloaded)')
     }
 
     // 客户端已断开，不排队
     if (signal?.aborted) {
+      this.recordRejected('aborted')
       throw new Error('Request aborted by client')
     }
 
@@ -107,24 +145,29 @@ export class RequestQueue {
     })
 
     return new Promise<() => void>((resolve, reject) => {
+      const enqueuedAt = Date.now()
       const entry: QueueEntry = {
         resolve: () => {
           this.activeCount++
+          this.recordAcquired()
+          this.recordWaitTime(Date.now() - enqueuedAt)
           resolve(() => this.release())
         },
         reject,
         timer: setTimeout(() => {
           this.removeFromQueue(entry)
+          this.recordRejected('timeout')
           reject(new Error(`Request queued timeout after ${this.config.timeoutMs}ms`))
         }, this.config.timeoutMs),
         signal,
-        enqueuedAt: Date.now()
+        enqueuedAt
       }
 
       // 监听客户端断开
       if (signal) {
         entry.abortHandler = () => {
           this.removeFromQueue(entry)
+          this.recordRejected('aborted')
           reject(new Error('Request aborted by client while queued'))
         }
         signal.addEventListener('abort', entry.abortHandler, { once: true })
@@ -146,6 +189,12 @@ export class RequestQueue {
    * 处理队列：取出下一个等待的请求
    */
   private processQueue(): void {
+    // 无限制模式：放行所有排队请求
+    if (this.maxConcurrent <= 0) {
+      this.drainQueue()
+      return
+    }
+
     while (this.queue.length > 0 && this.activeCount < this.maxConcurrent) {
       const entry = this.queue.shift()
       if (!entry) break
@@ -174,8 +223,47 @@ export class RequestQueue {
   }
 
   /**
-   * 从队列中移除指定条目
+   * 放行队列中所有等待的请求（切换到无限制模式时调用）
+   * 注意：entry.resolve() 内部会执行 this.activeCount++（see line 111-113），
+   * 无限制模式下 activeCount 仅用于追踪，不用于准入判断
    */
+  private drainQueue(): void {
+    const drained = this.queue.length
+    while (this.queue.length > 0) {
+      const entry = this.queue.shift()
+      if (!entry) break
+      clearTimeout(entry.timer)
+      if (entry.signal && entry.abortHandler) {
+        entry.signal.removeEventListener('abort', entry.abortHandler)
+      }
+      if (entry.signal?.aborted) {
+        continue
+      }
+      const waitTime = Date.now() - entry.enqueuedAt
+      logger.info('Request drained (unlimited mode)', { waitTime, remaining: this.queue.length })
+      entry.resolve()
+    }
+    if (drained > 0) {
+      logger.info('Queue drained', { totalDrained: drained })
+    }
+  }
+
+  private recordAcquired(): void {
+    this.stats.totalAcquired++
+  }
+
+  private recordRejected(reason: string): void {
+    this.stats.totalRejected++
+    this.stats.rejectReasons[reason] = (this.stats.rejectReasons[reason] || 0) + 1
+  }
+
+  private recordWaitTime(ms: number): void {
+    this.stats.waitTimeSamples.push(ms)
+    if (this.stats.waitTimeSamples.length > 100) {
+      this.stats.waitTimeSamples.shift()
+    }
+  }
+
   private removeFromQueue(entry: QueueEntry): void {
     const index = this.queue.indexOf(entry)
     if (index !== -1) {

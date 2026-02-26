@@ -52,6 +52,70 @@ function getClaudeErrorType(statusCode: number): string {
   }
 }
 
+/**
+ * 计算动态 Retry-After 值（秒）
+ * 区分本地并发超限 vs 上游配额耗尽
+ */
+function computeRetryAfter(statusCode: number, errorKindOrError?: string | Error): number {
+  const status = getConcurrencyStatus()
+  const { active, queued, maxConcurrent } = status.queue
+
+  // 区分 429 来源
+  if (statusCode === 429) {
+    const isUpstream = typeof errorKindOrError === 'string'
+      ? (errorKindOrError === 'upstream_quota')
+      : (errorKindOrError instanceof KiroApiError
+        || errorKindOrError?.message?.includes('quota')
+        || errorKindOrError?.message?.includes('Quota'))
+    if (isUpstream) {
+      // 上游配额耗尽：用较长冷却
+      return 30
+    }
+    // 本地限流：基于队列压力，1~15s
+    if (maxConcurrent <= 0) return 1
+    const pressure = queued / Math.max(1, maxConcurrent)
+    return Math.max(1, Math.min(15, Math.ceil(pressure * 3)))
+  }
+
+  if (statusCode === 502 || statusCode === 529) {
+    // 过载：基于活跃请求比例，2~30s
+    if (maxConcurrent <= 0) return 5
+    const utilization = active / Math.max(1, maxConcurrent)
+    return Math.max(2, Math.min(30, Math.ceil(utilization * 10)))
+  }
+
+  if (statusCode === 503) {
+    // 无可用账号：固定 30s
+    return 30
+  }
+
+  return 5
+}
+
+/**
+ * 过载前置检查：在消耗 CPU 处理请求前快速拒绝
+ * 使用 accountPool.availableCount 而非 concurrency map 的 accounts.length
+ */
+function checkOverload(): { reject: boolean; reason?: string; statusCode?: number } {
+  // 冷启动阶段允许继续，后续由 getProxyServer() 完成懒初始化
+  if (!proxyServer) return { reject: false }
+
+  const status = proxyServer.getConcurrencyStatus()
+  const { queued, maxConcurrent } = status.queue
+
+  const availableCount = proxyServer.getAvailableAccountCount()
+  if (availableCount === 0) {
+    return { reject: true, reason: 'No available accounts', statusCode: 503 }
+  }
+
+  // 队列深度超过上限的 2 倍：过载拒绝
+  if (maxConcurrent > 0 && queued > maxConcurrent * 2) {
+    return { reject: true, reason: 'Queue overloaded', statusCode: 502 }
+  }
+
+  return { reject: false }
+}
+
 // 创建 ProxyServer 实例
 let proxyServer: ProxyServer | null = null
 
@@ -101,10 +165,7 @@ async function getProxyServer(): Promise<ProxyServer> {
     const accounts = await accountStore.getAvailableAccounts()
     proxyServer.addAccounts(accounts)
 
-    // 初始化后立即计算动态并发
-    if (config.concurrencyMultiplier && config.concurrencyMultiplier > 0) {
-      proxyServer.recalculateDynamicConcurrency()
-    }
+    // addAccounts 内部已无条件调用 recalculateDynamicConcurrency
 
     logger.info('ProxyServer initialized', { accountCount: accounts.length })
   }
@@ -188,6 +249,19 @@ export async function updateProxyServerConfig(): Promise<void> {
  * POST /v1/messages
  */
 router.post('/messages', async (req: Request, res: Response) => {
+  // 过载前置拒绝：在解析请求体前快速检查
+  const overload = checkOverload()
+  if (overload.reject) {
+    const statusCode = overload.statusCode || 502
+    const retryAfter = computeRetryAfter(statusCode)
+    res.setHeader('Retry-After', String(retryAfter))
+    res.status(statusCode).json({
+      type: 'error',
+      error: { type: getClaudeErrorType(statusCode), message: overload.reason || 'Service overloaded' }
+    })
+    return
+  }
+
   const request = req.body as ClaudeRequest
 
   if (!request.messages || !Array.isArray(request.messages)) {
@@ -275,6 +349,9 @@ router.post('/messages', async (req: Request, res: Response) => {
               if (!res.headersSent) {
                 // Headers 未发送，直接返回 JSON 错误响应
                 res.setHeader('Content-Type', 'application/json')
+                if ([429, 502, 503, 529].includes(statusCode)) {
+                  res.setHeader('Retry-After', String(computeRetryAfter(statusCode, error)))
+                }
                 res.status(statusCode).json({
                   type: 'error',
                   error: { type: errorType, message: error.message }
@@ -306,6 +383,9 @@ router.post('/messages', async (req: Request, res: Response) => {
         } else {
           const statusCode = result.statusCode || 500
           const errorType = getClaudeErrorType(statusCode)
+          if ([429, 502, 503, 529].includes(statusCode)) {
+            res.setHeader('Retry-After', String(computeRetryAfter(statusCode, result.errorKind)))
+          }
           res.status(statusCode).json({
             type: 'error',
             error: { type: errorType, message: result.error || 'Unknown error' }
@@ -317,6 +397,9 @@ router.post('/messages', async (req: Request, res: Response) => {
     const statusCode = getHttpStatusFromError(error as Error)
     const errorType = getClaudeErrorType(statusCode)
     logger.error('Request failed', { error: (error as Error).message, statusCode })
+    if (!res.headersSent && [429, 502, 503, 529].includes(statusCode)) {
+      res.setHeader('Retry-After', String(computeRetryAfter(statusCode, error as Error)))
+    }
     res.status(statusCode).json({
       type: 'error',
       error: { type: errorType, message: (error as Error).message }

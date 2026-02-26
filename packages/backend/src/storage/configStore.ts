@@ -9,6 +9,17 @@ import type { WebhookConfig } from '@kiro-gateway/shared'
 
 const logger = createLogger('ConfigStore')
 
+/**
+ * 安全解析整数，处理 undefined / NaN / 0 值
+ * parseInt("0") = 0（falsy），直接用 || 会错误回退到 fallback
+ * parseInt("abc") = NaN，也是 falsy，需要 Number.isFinite 兜底
+ */
+function safeParseInt(value: string | undefined, fallback: number): number {
+  if (value === undefined) return fallback
+  const parsed = parseInt(value, 10)
+  return Number.isFinite(parsed) ? parsed : fallback
+}
+
 // Redis Key
 const CONFIG_KEY = 'config'
 const SELECTED_ACCOUNTS_KEY = 'config:selectedAccounts'
@@ -66,7 +77,7 @@ const DEFAULT_CONFIG: GatewayConfig = {
   port: 3000,
   host: '0.0.0.0',
   enableMultiAccount: true,
-  maxConcurrent: 8,
+  maxConcurrent: 0,
   maxRetries: 3,
   retryDelay: 1000,
   requestTimeout: 120000,
@@ -108,13 +119,13 @@ export async function getGatewayConfig(): Promise<GatewayConfig> {
     const tokenRefreshBeforeExpiryRaw = data.tokenRefreshBeforeExpiry ?? data.tokenRefreshAdvance
 
     return {
-      port: parseInt(data.port, 10) || DEFAULT_CONFIG.port,
+      port: safeParseInt(data.port, DEFAULT_CONFIG.port),
       host: data.host || DEFAULT_CONFIG.host,
       enableMultiAccount: enableMultiAccountRaw !== undefined ? enableMultiAccountRaw === 'true' : DEFAULT_CONFIG.enableMultiAccount,
-      maxConcurrent: parseInt(data.maxConcurrent, 10) || DEFAULT_CONFIG.maxConcurrent,
-      maxRetries: parseInt(data.maxRetries, 10) || DEFAULT_CONFIG.maxRetries,
-      retryDelay: parseInt(data.retryDelay, 10) || DEFAULT_CONFIG.retryDelay,
-      requestTimeout: parseInt(data.requestTimeout, 10) || DEFAULT_CONFIG.requestTimeout,
+      maxConcurrent: safeParseInt(data.maxConcurrent, DEFAULT_CONFIG.maxConcurrent),
+      maxRetries: safeParseInt(data.maxRetries, DEFAULT_CONFIG.maxRetries),
+      retryDelay: safeParseInt(data.retryDelay, DEFAULT_CONFIG.retryDelay),
+      requestTimeout: safeParseInt(data.requestTimeout, DEFAULT_CONFIG.requestTimeout),
       preferredEndpoint: data.preferredEndpoint as GatewayConfig['preferredEndpoint'],
       defaultRegion: data.defaultRegion || DEFAULT_CONFIG.defaultRegion,
       disableTools,
@@ -127,8 +138,8 @@ export async function getGatewayConfig(): Promise<GatewayConfig> {
         ? (parseInt(tokenRefreshBeforeExpiryRaw, 10) || 300)
         : 300,
       rateLimitEnabled: data.rateLimitEnabled === 'true',
-      rateLimitWindow: parseInt(data.rateLimitWindow, 10) || DEFAULT_CONFIG.rateLimitWindow,
-      rateLimitMax: parseInt(data.rateLimitMax, 10) || DEFAULT_CONFIG.rateLimitMax,
+      rateLimitWindow: safeParseInt(data.rateLimitWindow, DEFAULT_CONFIG.rateLimitWindow),
+      rateLimitMax: safeParseInt(data.rateLimitMax, DEFAULT_CONFIG.rateLimitMax),
       // 账号池配置（透传保存的值，确保 GET 时不丢失）
       ...(data.errorCooldownTime && { errorCooldownTime: parseInt(data.errorCooldownTime, 10) }),
       ...(data.maxConsecutiveErrors && { maxConsecutiveErrors: parseInt(data.maxConsecutiveErrors, 10) }),
