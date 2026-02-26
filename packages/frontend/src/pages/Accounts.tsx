@@ -532,6 +532,27 @@ export function Accounts() {
             <CardTitle>账号列表</CardTitle>
             <CardDescription>
               共 {accounts?.length ?? 0} 个账号
+              {concurrencyData?.queue && (
+                <span className="ml-3 inline-flex items-center gap-2">
+                  <span className="text-blue-600">
+                    活跃 {concurrencyData.queue.active}
+                  </span>
+                  {concurrencyData.queue.queued > 0 && (
+                    <span className="text-orange-600 font-semibold animate-pulse">
+                      排队 {concurrencyData.queue.queued}
+                    </span>
+                  )}
+                  {concurrencyData.queue.maxConcurrent > 0 ? (
+                    <span className="text-muted-foreground">
+                      / 上限 {concurrencyData.queue.maxConcurrent}
+                    </span>
+                  ) : (
+                    <span className="text-muted-foreground">
+                      (不限制)
+                    </span>
+                  )}
+                </span>
+              )}
             </CardDescription>
           </div>
           <Button

@@ -86,7 +86,7 @@ const DEFAULT_CONFIG: ProxyConfig = {
   enableMultiAccount: true,
   selectedAccountIds: [],
   logRequests: true,
-  maxConcurrent: 8,
+  maxConcurrent: 0,
   maxRetries: 3,
   retryDelayMs: 1000,
   tokenRefreshBeforeExpiry: 300,
@@ -116,7 +116,7 @@ export class ProxyServer {
   private accountPool: AccountPool
   private stats: ProxyStats
   private events: ProxyServerEvents
-  private refreshingTokens: Set<string> = new Set()
+  private refreshingTokens: Map<string, Promise<boolean>> = new Map()
   private apiKeys: Map<string, ApiKey> = new Map()
   private requestQueue: RequestQueue
   private inflightRequests: Map<string, InflightRequest> = new Map()
@@ -169,12 +169,24 @@ export class ProxyServer {
    * 配置乘数时：effectiveMax = max(maxConcurrent, floor(multiplier * availableCount))
    */
   recalculateDynamicConcurrency(): void {
+    const baseMax = this.config.maxConcurrent
+
+    // maxConcurrent<=0 表示不限制，跳过动态计算，保持无限制语义
+    if (baseMax <= 0) {
+      this.requestQueue.updateConfig(0, {
+        enabled: this.config.queueEnabled,
+        maxSize: this.config.queueMaxSize ?? 0,
+        timeoutMs: this.config.queueTimeoutMs
+      })
+      logger.info('Concurrency unlimited mode (maxConcurrent=0)')
+      return
+    }
+
     const multiplier = this.config.concurrencyMultiplier && this.config.concurrencyMultiplier > 0
       ? this.config.concurrencyMultiplier
       : 10  // 默认每账号 10 并发
 
     const availableCount = this.accountPool.availableCount
-    const baseMax = this.config.maxConcurrent
     const effectiveMax = Math.max(baseMax, Math.floor(multiplier * availableCount))
 
     const queueMultiplier = this.config.queueSizeMultiplier
@@ -345,15 +357,29 @@ export class ProxyServer {
   // ============ Token 刷新 ============
 
   private async refreshToken(account: ProxyAccount): Promise<boolean> {
-    // 防止并发刷新
-    if (this.refreshingTokens.has(account.id)) {
-      logger.debug('Token refresh already in progress', { accountId: account.id })
-      return false
+    // 已有刷新进行中：等待同一个 Promise（不重复发起）
+    const existing = this.refreshingTokens.get(account.id)
+    if (existing) {
+      logger.debug('Token refresh already in progress, awaiting', { accountId: account.id })
+      return existing
     }
 
-    this.refreshingTokens.add(account.id)
     this.accountPool.markNeedsRefresh(account.id)
 
+    const refreshPromise = this._doRefreshToken(account)
+    this.refreshingTokens.set(account.id, refreshPromise)
+
+    try {
+      return await refreshPromise
+    } finally {
+      this.refreshingTokens.delete(account.id)
+    }
+  }
+
+  /**
+   * 实际 Token 刷新逻辑（从 refreshToken 抽取，供 Promise 缓存使用）
+   */
+  private async _doRefreshToken(account: ProxyAccount): Promise<boolean> {
     try {
       let result: { success: boolean; accessToken?: string; refreshToken?: string; expiresAt?: number; error?: string }
 
@@ -380,8 +406,6 @@ export class ProxyServer {
     } catch (error) {
       logger.error('Token refresh error', { accountId: account.id, error: (error as Error).message })
       return false
-    } finally {
-      this.refreshingTokens.delete(account.id)
     }
   }
 
@@ -498,20 +522,23 @@ export class ProxyServer {
   }
 
   /**
-   * 获取并发状态概览（队列 + 每账号并发数）
+   * 获取并发状态概览（队列 + 每账号并发数 + 可观测性指标）
    */
-  getConcurrencyStatus(): {
-    queue: { active: number; queued: number; maxConcurrent: number }
-    accounts: Array<{ accountId: string; concurrency: number }>
-  } {
+  getConcurrencyStatus() {
     const concurrencyMap = this.accountPool.getAllConcurrency()
     const accounts = Array.from(concurrencyMap.entries()).map(([accountId, concurrency]) => ({
       accountId,
       concurrency
     }))
+    const now = Date.now()
     return {
       queue: this.requestQueue.getStatus(),
-      accounts
+      accounts,
+      queueStats: this.requestQueue.getStats(),
+      inflight: this.getInflightRequests().map(r => ({
+        ...r,
+        age: now - r.startTime
+      }))
     }
   }
 
@@ -800,13 +827,16 @@ export class ProxyServer {
 
   // ============ Claude 请求处理 ============
 
+  /** 错误来源分类，用于区分 Retry-After 策略 */
+  static readonly ErrorKinds = ['local_overload', 'upstream_quota', 'upstream_overloaded', 'no_accounts', 'unknown'] as const
+
   async handleClaudeRequest(
     request: ClaudeRequest,
     _headers?: Record<string, string>,
     boundAccountIds?: string[],
     signal?: AbortSignal,
     matchedApiKeyId?: string
-  ): Promise<{ success: boolean; response?: unknown; error?: string; statusCode?: number }> {
+  ): Promise<{ success: boolean; response?: unknown; error?: string; statusCode?: number; errorKind?: string }> {
     return this._handleClaudeRequest(request, _headers, boundAccountIds, signal, matchedApiKeyId)
   }
 
@@ -816,7 +846,7 @@ export class ProxyServer {
     boundAccountIds?: string[],
     signal?: AbortSignal,
     matchedApiKeyId?: string
-  ): Promise<{ success: boolean; response?: unknown; error?: string; statusCode?: number }> {
+  ): Promise<{ success: boolean; response?: unknown; error?: string; statusCode?: number; errorKind?: string }> {
     this.recordNewRequest()
     this.events.onRequest?.({ path: '/v1/messages', method: 'POST' })
     const effectiveRequest = this.getEffectiveRequest(request)
@@ -836,10 +866,10 @@ export class ProxyServer {
 
     // 统一账号选择
     const sessionHash = computeSessionHash(effectiveRequest, _headers?.['x-session-id'])
-    const { account, stickyFallback } = await this.selectAccount(sessionHash, boundAccountIds)
+    let { account, stickyFallback } = await this.selectAccount(sessionHash, boundAccountIds)
     if (!account) {
       this.recordRequestFailed()
-      return { success: false, error: 'No available accounts' }
+      return { success: false, error: 'No available accounts', statusCode: 503, errorKind: 'no_accounts' }
     }
 
     let release: (() => void) | undefined
@@ -856,13 +886,34 @@ export class ProxyServer {
       const msg = (error as Error).message
       const statusCode = error instanceof KiroApiError ? error.statusCode
         : msg.includes('502') || msg.includes('Too many concurrent') ? 502 : 500
-      return { success: false, error: msg, statusCode }
+      return { success: false, error: msg, statusCode, errorKind: 'local_overload' }
     }
 
     // 追踪账号并发（可变引用，callWithRetry 切换账号时会同步更新）
     const concurrencyRef = { accountId: account.id }
     this.accountPool.incrementConcurrency(concurrencyRef.accountId)
     let accountConcurrencyTracked = true
+
+    // 并发竞态后验证：排队期间同一账号可能被其他请求占满
+    if (account.maxConcurrency && account.maxConcurrency > 0) {
+      const actual = this.accountPool.getConcurrency(concurrencyRef.accountId)
+      if (actual > account.maxConcurrency) {
+        this.accountPool.decrementConcurrency(concurrencyRef.accountId)
+        const fallback = this.accountPool.getNextAvailableAccount(account.id)
+        if (fallback) {
+          concurrencyRef.accountId = fallback.id
+          account = fallback
+          this.accountPool.incrementConcurrency(concurrencyRef.accountId)
+        } else {
+          accountConcurrencyTracked = false
+          if (reqId) {
+            this.inflightRequests.delete(reqId)
+          }
+          release?.()
+          return { success: false, error: 'All accounts at concurrency limit', statusCode: 503, errorKind: 'no_accounts' }
+        }
+      }
+    }
     const startTime = Date.now()
 
     try {
@@ -1038,7 +1089,11 @@ export class ProxyServer {
         error: (error as Error).message
       })
 
-      return { success: false, error: (error as Error).message, statusCode }
+      const classified = this.classifyRetryError(error as Error)
+      const errorKind = classified.kind === 'quota_exhausted' ? 'upstream_quota'
+        : classified.kind === 'overloaded' ? 'upstream_overloaded'
+        : 'unknown'
+      return { success: false, error: (error as Error).message, statusCode, errorKind }
     } finally {
       if (accountConcurrencyTracked) {
         this.accountPool.decrementConcurrency(concurrencyRef.accountId)
@@ -1086,7 +1141,7 @@ export class ProxyServer {
 
     // 统一账号选择
     const sessionHash = computeSessionHash(effectiveRequest, headers?.['x-session-id'])
-    const { account, stickyFallback } = await this.selectAccount(sessionHash, boundAccountIds)
+    let { account, stickyFallback } = await this.selectAccount(sessionHash, boundAccountIds)
     if (!account) {
       this.recordRequestFailed()
       callbacks.onError(new Error('No available accounts'))
@@ -1108,38 +1163,49 @@ export class ProxyServer {
       return
     }
 
-    // 追踪账号并发
-    this.accountPool.incrementConcurrency(account.id)
+    // 追踪账号并发（可变引用，与 _handleClaudeRequest 对齐）
+    const concurrencyRef = { accountId: account.id }
+    this.accountPool.incrementConcurrency(concurrencyRef.accountId)
     let accountConcurrencyTracked = true
     const startTime = Date.now()
 
-    // 检查是否为 WebSearch 请求，完全绕过 Kiro generateAssistantResponse
-    if (hasWebSearchTool(effectiveRequest)) {
-      logger.info('WebSearch tool detected, routing to WebSearch handler')
-      try {
-        await handleWebSearchStream(effectiveRequest, account, callbacks, matchedApiKeyId)
-      } catch (error) {
-        callbacks.onError(error as Error)
-      } finally {
-        if (accountConcurrencyTracked) {
-          this.accountPool.decrementConcurrency(account.id)
+    // 并发竞态后验证：排队期间同一账号可能被其他请求占满
+    if (account.maxConcurrency && account.maxConcurrency > 0) {
+      const actual = this.accountPool.getConcurrency(concurrencyRef.accountId)
+      if (actual > account.maxConcurrency) {
+        this.accountPool.decrementConcurrency(concurrencyRef.accountId)
+        const fallback = this.accountPool.getNextAvailableAccount(account.id)
+        if (fallback) {
+          concurrencyRef.accountId = fallback.id
+          account = fallback
+          this.accountPool.incrementConcurrency(concurrencyRef.accountId)
+        } else {
           accountConcurrencyTracked = false
+          if (reqId) {
+            this.inflightRequests.delete(reqId)
+          }
+          release?.()
+          callbacks.onError(new Error('All accounts at concurrency limit'))
+          return
         }
-        if (reqId) {
-          this.inflightRequests.delete(reqId)
-        }
-        release?.()
       }
-      return
     }
 
-    // 检查是否启用 Thinking 模式
-    const modelThinkingEnabled = this.config.modelThinkingMode?.[effectiveRequest.model]
-    const headerThinking = headers?.['anthropic-beta']?.toLowerCase().includes('thinking')
-    const requestThinking = effectiveRequest.thinking?.type === 'enabled'
-    const thinkingEnabled = modelThinkingEnabled || headerThinking || requestThinking
-
     try {
+      // 检查是否为 WebSearch 请求，完全绕过 Kiro generateAssistantResponse
+      if (hasWebSearchTool(effectiveRequest)) {
+        logger.info('WebSearch tool detected, routing to WebSearch handler')
+        // handleWebSearchStream 内部已调用 callbacks.onComplete()
+        await handleWebSearchStream(effectiveRequest, account, callbacks, matchedApiKeyId)
+        return
+      }
+
+      // 检查是否启用 Thinking 模式
+      const modelThinkingEnabled = this.config.modelThinkingMode?.[effectiveRequest.model]
+      const headerThinking = headers?.['anthropic-beta']?.toLowerCase().includes('thinking')
+      const requestThinking = effectiveRequest.thinking?.type === 'enabled'
+      const thinkingEnabled = modelThinkingEnabled || headerThinking || requestThinking
+
       let kiroPayload = claudeToKiro(effectiveRequest, account.profileArn)
 
       // 注入 thinking 提示到系统消息位置（payload 第一条 history user 消息前）
@@ -1247,7 +1313,7 @@ export class ProxyServer {
       callbacks.onError(error as Error)
     } finally {
       if (accountConcurrencyTracked) {
-        this.accountPool.decrementConcurrency(account.id)
+        this.accountPool.decrementConcurrency(concurrencyRef.accountId)
         accountConcurrencyTracked = false
       }
       if (reqId) {

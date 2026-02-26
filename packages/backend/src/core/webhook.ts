@@ -39,7 +39,19 @@ export async function notify(notification: WebhookNotification): Promise<void> {
   if (notification.type === 'token_refresh_fail' && !config.notifyOnTokenRefreshFail) return
   if (notification.type === 'heartbeat' && !config.notifyHeartbeat) return
 
-  const platforms = config.platforms.filter(p => p.enabled && p.url)
+  const isErrorSuspendedWithoutReason = (() => {
+    if (notification.type !== 'account_error') return false
+    const detail = (notification.detail || {}) as Record<string, unknown>
+    const status = detail.status
+    const reason = typeof detail.reason === 'string' ? detail.reason.trim() : ''
+    return status === 'error_suspended' && reason.length === 0
+  })()
+
+  const platforms = config.platforms.filter(p => {
+    if (!(p.enabled && p.url)) return false
+    if (isErrorSuspendedWithoutReason && p.platform === 'feishu') return false
+    return true
+  })
   if (platforms.length === 0) return
 
   const results = await Promise.allSettled(
