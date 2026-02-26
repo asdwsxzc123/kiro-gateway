@@ -6,12 +6,16 @@
 
 import type { ProxyAccount } from './types.js'
 import type { AccountStatus } from '@kiro-gateway/shared'
+import { AccountWaitQueue } from './accountWaitQueue.js'
+import type { AccountWaitQueueConfig } from './accountWaitQueue.js'
 import { notify } from './webhook.js'
 import { createLogger } from '../utils/logger.js'
 
 const logger = createLogger('AccountPool')
 
 export type { AccountStatus }
+
+export type AccountUnavailableReason = 'pool_empty' | 'all_unavailable' | 'all_concurrency_full'
 
 export interface AccountPoolStats {
   id: string
@@ -35,6 +39,7 @@ export class AccountPool {
   // 每账号活跃请求数追踪（内存级，单实例无需 Redis）
   private activeConcurrency: Map<string, number> = new Map()
   private poolConfig: PoolConfig = { errorCooldownMs: 60000, maxConsecutiveErrors: 3 }
+  private waitQueue: AccountWaitQueue = new AccountWaitQueue()
 
   /**
    * 更新账号池配置（可热更新）
@@ -450,6 +455,71 @@ export class AccountPool {
     return bestAccount
   }
 
+  // ============ 账号等待队列 ============
+
+  /** 暴露 waitQueue 给外部 */
+  getWaitQueue(): AccountWaitQueue { return this.waitQueue }
+
+  /** 更新等待队列配置 */
+  updateWaitQueueConfig(config: Partial<AccountWaitQueueConfig>): void {
+    this.waitQueue.updateConfig(config)
+  }
+
+  /**
+   * 获取下一个可用账号，失败时返回结构化原因
+   * - pool_empty: 池中无账号
+   * - all_unavailable: 全部 disabled/cooldown/needsRefresh
+   * - all_concurrency_full: 全部并发满（等待有意义）
+   */
+  getNextAccountOrReason(boundAccountIds?: string[]):
+    { account: ProxyAccount; reason?: undefined } |
+    { account: null; reason: AccountUnavailableReason } {
+
+    if (this.accountOrder.length === 0) {
+      return { account: null, reason: 'pool_empty' }
+    }
+
+    const candidates = boundAccountIds && boundAccountIds.length > 0
+      ? boundAccountIds
+      : this.accountOrder
+
+    const now = Date.now()
+    let bestAccount: ProxyAccount | null = null
+    let bestConcurrency = Infinity
+    let bestLastUsed = Infinity
+    let hasConcurrencyFullOnly = true
+
+    for (const id of candidates) {
+      const account = this.accounts.get(id)
+      const stats = this.accountStats.get(id)
+      if (!account || !stats) continue
+      if (!this.isActive(account)) { hasConcurrencyFullOnly = false; continue }
+      if (account.cooldownUntil && account.cooldownUntil > now) { hasConcurrencyFullOnly = false; continue }
+      if (stats.needsRefresh) { hasConcurrencyFullOnly = false; continue }
+
+      const concurrency = this.activeConcurrency.get(id) || 0
+      if (account.maxConcurrency && account.maxConcurrency > 0 && concurrency >= account.maxConcurrency) {
+        continue
+      }
+
+      const lastUsed = stats.lastUsed || 0
+      if (concurrency < bestConcurrency || (concurrency === bestConcurrency && lastUsed < bestLastUsed)) {
+        bestConcurrency = concurrency
+        bestLastUsed = lastUsed
+        bestAccount = account
+      }
+    }
+
+    if (bestAccount) {
+      return { account: bestAccount }
+    }
+
+    return {
+      account: null,
+      reason: hasConcurrencyFullOnly ? 'all_concurrency_full' : 'all_unavailable'
+    }
+  }
+
   /**
    * 如果指定账号可用则返回，否则返回 null（由调用方 fallback 到轮询）
    * 检查条件：账号存在 + status=active + 不在 cooldown 期 + 不需要 refresh + 并发未满
@@ -488,11 +558,13 @@ export class AccountPool {
   }
 
   /**
-   * 减少账号活跃并发数
+   * 减少账号活跃并发数，并唤醒等待队列中的下一个请求
    */
   decrementConcurrency(id: string): void {
     const current = this.activeConcurrency.get(id) || 0
     this.activeConcurrency.set(id, Math.max(0, current - 1))
+    // 槽位释放，唤醒等待队列中的下一个请求
+    this.waitQueue.notifySlotFreed(id)
   }
 
   /**
@@ -517,6 +589,7 @@ export class AccountPool {
     this.accountStats.clear()
     this.accountOrder = []
     this.activeConcurrency.clear()
+    this.waitQueue.clear()
   }
 
   /**
