@@ -121,6 +121,20 @@ export async function batchDeleteAccounts(
 }
 
 /**
+ * 批量更新账号并发数
+ * accountIds 为空时更新全部
+ */
+export async function batchUpdateConcurrency(
+  maxConcurrency: number,
+  accountIds?: string[]
+): Promise<{ updated: number; maxConcurrency: number }> {
+  const response = await apiClient.post<
+    ApiResponse<{ updated: number; maxConcurrency: number }>
+  >("/accounts/batch/update-concurrency", { maxConcurrency, accountIds })
+  return response.data.data!
+}
+
+/**
  * 批量获取所有账号使用量
  */
 export async function getAllAccountsUsage(): Promise<AccountUsage[]> {

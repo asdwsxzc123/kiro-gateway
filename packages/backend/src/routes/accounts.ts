@@ -100,6 +100,39 @@ router.post('/batch/resume', async (req: Request, res: Response) => {
 })
 
 /**
+ * 批量更新账号并发数
+ * POST /api/accounts/batch/update-concurrency
+ * body: { maxConcurrency: number, accountIds?: string[] }
+ */
+router.post('/batch/update-concurrency', async (req: Request, res: Response) => {
+  try {
+    const { maxConcurrency, accountIds } = req.body as { maxConcurrency: number; accountIds?: string[] }
+
+    if (maxConcurrency == null || typeof maxConcurrency !== 'number' || maxConcurrency < 0) {
+      res.status(400).json({
+        success: false,
+        error: { message: 'maxConcurrency must be a non-negative number' }
+      } as ApiResponse)
+      return
+    }
+
+    const updated = await accountService.batchUpdateConcurrency(maxConcurrency, accountIds)
+    await refreshProxyServerAccounts()
+
+    res.json({
+      success: true,
+      data: { updated, maxConcurrency }
+    } as ApiResponse)
+  } catch (error) {
+    logger.error('Failed to batch update concurrency', { error: (error as Error).message })
+    res.status(500).json({
+      success: false,
+      error: { message: (error as Error).message }
+    } as ApiResponse)
+  }
+})
+
+/**
  * 批量删除账号
  * POST /api/accounts/batch/delete
  * body: { accountIds: string[] }  — 为空时删除全部

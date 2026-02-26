@@ -23,7 +23,7 @@ import type {
 } from './types.js'
 import { KiroApiError } from './types.js'
 import { AccountPool } from './accountPool.js'
-import type { PoolConfig } from './accountPool.js'
+import type { PoolConfig, AccountUnavailableReason } from './accountPool.js'
 import {
   claudeToKiro,
   kiroToClaudeResponse,
@@ -436,9 +436,10 @@ export class ProxyServer {
     sessionHash?: string | null,
     boundAccountIds?: string[],
     signal?: AbortSignal
-  ): Promise<{ account: ProxyAccount | null; stickyFallback?: boolean }> {
+  ): Promise<{ account: ProxyAccount | null; stickyFallback?: boolean; unavailableReason?: AccountUnavailableReason }> {
     let account: ProxyAccount | null = null
     let stickyFallback = false
+    let unavailableReason: AccountUnavailableReason | undefined
 
     // 1. 粘性会话绑定（带智能续期和验证）
     if (sessionHash) {
@@ -486,6 +487,7 @@ export class ProxyServer {
       if (result.account) {
         account = result.account
       } else if (result.reason === 'all_concurrency_full') {
+        unavailableReason = 'all_concurrency_full'
         // 所有账号并发满 → 进入等待队列
         const waitQueue = this.accountPool.getWaitQueue()
         if (waitQueue.enabled) {
@@ -495,8 +497,10 @@ export class ProxyServer {
             const retry = this.accountPool.getNextAccountOrReason(boundAccountIds)
             if (retry.account) {
               account = retry.account
+              unavailableReason = undefined
               waitQueue.recordWokenSuccess()
             } else {
+              unavailableReason = retry.reason ?? 'all_concurrency_full'
               waitQueue.recordWokenRaceLost()
               // 竞争失败，不再重试（避免无限循环）
             }
@@ -504,6 +508,8 @@ export class ProxyServer {
             // timeout / aborted / queue full → 走到下面的 null 检查
           }
         }
+      } else {
+        unavailableReason = result.reason
       }
       // reason === 'pool_empty' | 'all_unavailable' → account 仍为 null，快速失败
     }
@@ -511,9 +517,10 @@ export class ProxyServer {
     if (!account) {
       logger.warn('No available accounts', {
         poolSize: this.accountPool.getPoolSize(),
-        bound: boundAccountIds?.length ?? 0
+        bound: boundAccountIds?.length ?? 0,
+        reason: unavailableReason
       })
-      return { account: null }
+      return { account: null, unavailableReason }
     }
 
     // 3. Region 兜底
@@ -897,10 +904,11 @@ export class ProxyServer {
 
     // 统一账号选择
     const sessionHash = computeSessionHash(effectiveRequest, _headers?.['x-session-id'])
-    let { account, stickyFallback } = await this.selectAccount(sessionHash, boundAccountIds, signal)
+    let { account, stickyFallback, unavailableReason } = await this.selectAccount(sessionHash, boundAccountIds, signal)
     if (!account) {
       this.recordRequestFailed()
-      return { success: false, error: 'No available accounts', statusCode: 503, errorKind: 'no_accounts' }
+      const statusCode = unavailableReason === 'all_concurrency_full' ? 503 : 403
+      return { success: false, error: 'No available accounts', statusCode, errorKind: 'no_accounts' }
     }
 
     let release: (() => void) | undefined
@@ -1172,10 +1180,13 @@ export class ProxyServer {
 
     // 统一账号选择
     const sessionHash = computeSessionHash(effectiveRequest, headers?.['x-session-id'])
-    let { account, stickyFallback } = await this.selectAccount(sessionHash, boundAccountIds, signal)
+    let { account, stickyFallback, unavailableReason } = await this.selectAccount(sessionHash, boundAccountIds, signal)
     if (!account) {
       this.recordRequestFailed()
-      callbacks.onError(new Error('No available accounts'))
+      const errMsg = unavailableReason === 'all_concurrency_full'
+        ? 'All accounts at concurrency limit'
+        : 'No available accounts'
+      callbacks.onError(new Error(errMsg))
       return
     }
 

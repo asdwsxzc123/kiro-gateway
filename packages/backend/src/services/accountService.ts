@@ -649,3 +649,29 @@ export async function batchResumeAccounts(accountIds: string[]): Promise<number>
   logger.info('Batch resume completed', { requested: accountIds.length, updated })
   return updated
 }
+
+/**
+ * 批量更新账号并发数
+ * @param maxConcurrency 目标并发数（0 表示不限制）
+ * @param accountIds 可选，指定账号 ID 列表；为空时更新全部
+ */
+export async function batchUpdateConcurrency(
+  maxConcurrency: number,
+  accountIds?: string[]
+): Promise<number> {
+  const ids = accountIds?.length
+    ? accountIds
+    : (await getAllAccounts()).map(a => a.id)
+
+  let updated = 0
+  for (const id of ids) {
+    const result = await accountStore.updateAccount(id, { maxConcurrency })
+    if (result) updated++
+  }
+  logger.info('Batch update concurrency completed', {
+    requested: ids.length,
+    updated,
+    maxConcurrency,
+  })
+  return updated
+}
