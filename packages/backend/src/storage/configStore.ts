@@ -69,6 +69,11 @@ export interface GatewayConfig {
   concurrencyMultiplier?: number
   queueSizeMultiplier?: number
 
+  // 账号等待队列配置
+  accountWaitEnabled?: boolean
+  accountWaitTimeoutMs?: number
+  accountWaitMaxSize?: number
+
   // 测试配置
   testModelId?: string
 }
@@ -155,6 +160,10 @@ export async function getGatewayConfig(): Promise<GatewayConfig> {
       // 动态并发配置
       ...(data.concurrencyMultiplier && { concurrencyMultiplier: parseFloat(data.concurrencyMultiplier) }),
       ...(data.queueSizeMultiplier && { queueSizeMultiplier: parseFloat(data.queueSizeMultiplier) }),
+      // 账号等待队列配置
+      ...(data.accountWaitEnabled !== undefined && { accountWaitEnabled: data.accountWaitEnabled === 'true' }),
+      ...(data.accountWaitTimeoutMs && { accountWaitTimeoutMs: parseInt(data.accountWaitTimeoutMs, 10) }),
+      ...(data.accountWaitMaxSize && { accountWaitMaxSize: parseInt(data.accountWaitMaxSize, 10) }),
     }
   } catch (error) {
     logger.error('Failed to get gateway config', { error: (error as Error).message })

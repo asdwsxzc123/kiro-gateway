@@ -160,6 +160,14 @@ export class ProxyServer {
     this.config = { ...this.config, ...updates }
     // 始终基于可用账号数动态计算并发上限
     this.recalculateDynamicConcurrency()
+    // 传递等待队列配置
+    if (updates.accountWaitEnabled !== undefined || updates.accountWaitTimeoutMs !== undefined || updates.accountWaitMaxSize !== undefined) {
+      this.accountPool.updateWaitQueueConfig({
+        enabled: updates.accountWaitEnabled,
+        timeoutMs: updates.accountWaitTimeoutMs,
+        maxSize: updates.accountWaitMaxSize
+      })
+    }
     logger.info('Config updated', { updates })
   }
 
@@ -426,7 +434,8 @@ export class ProxyServer {
    */
   async selectAccount(
     sessionHash?: string | null,
-    boundAccountIds?: string[]
+    boundAccountIds?: string[],
+    signal?: AbortSignal
   ): Promise<{ account: ProxyAccount | null; stickyFallback?: boolean }> {
     let account: ProxyAccount | null = null
     let stickyFallback = false
@@ -470,13 +479,33 @@ export class ProxyServer {
       }
     }
 
-    // 2. 从绑定账号子集或全局池中选择（LRU + 并发感知）
+    // 2. 从绑定账号子集或全局池中选择（LRU + 并发感知 + 等待队列）
     if (!account) {
-      if (boundAccountIds && boundAccountIds.length > 0) {
-        account = this.accountPool.getNextAccountFromSubset(boundAccountIds)
-      } else {
-        account = this.accountPool.getNextAccount()
+      const result = this.accountPool.getNextAccountOrReason(boundAccountIds)
+
+      if (result.account) {
+        account = result.account
+      } else if (result.reason === 'all_concurrency_full') {
+        // 所有账号并发满 → 进入等待队列
+        const waitQueue = this.accountPool.getWaitQueue()
+        if (waitQueue.enabled) {
+          try {
+            await waitQueue.wait(signal, boundAccountIds)
+            // 被唤醒，重试选择
+            const retry = this.accountPool.getNextAccountOrReason(boundAccountIds)
+            if (retry.account) {
+              account = retry.account
+              waitQueue.recordWokenSuccess()
+            } else {
+              waitQueue.recordWokenRaceLost()
+              // 竞争失败，不再重试（避免无限循环）
+            }
+          } catch {
+            // timeout / aborted / queue full → 走到下面的 null 检查
+          }
+        }
       }
+      // reason === 'pool_empty' | 'all_unavailable' → account 仍为 null，快速失败
     }
 
     if (!account) {
@@ -535,6 +564,8 @@ export class ProxyServer {
       queue: this.requestQueue.getStatus(),
       accounts,
       queueStats: this.requestQueue.getStats(),
+      accountWaitQueue: this.accountPool.getWaitQueue().getStatus(),
+      accountWaitStats: this.accountPool.getWaitQueue().getStats(),
       inflight: this.getInflightRequests().map(r => ({
         ...r,
         age: now - r.startTime
@@ -866,7 +897,7 @@ export class ProxyServer {
 
     // 统一账号选择
     const sessionHash = computeSessionHash(effectiveRequest, _headers?.['x-session-id'])
-    let { account, stickyFallback } = await this.selectAccount(sessionHash, boundAccountIds)
+    let { account, stickyFallback } = await this.selectAccount(sessionHash, boundAccountIds, signal)
     if (!account) {
       this.recordRequestFailed()
       return { success: false, error: 'No available accounts', statusCode: 503, errorKind: 'no_accounts' }
@@ -1141,7 +1172,7 @@ export class ProxyServer {
 
     // 统一账号选择
     const sessionHash = computeSessionHash(effectiveRequest, headers?.['x-session-id'])
-    let { account, stickyFallback } = await this.selectAccount(sessionHash, boundAccountIds)
+    let { account, stickyFallback } = await this.selectAccount(sessionHash, boundAccountIds, signal)
     if (!account) {
       this.recordRequestFailed()
       callbacks.onError(new Error('No available accounts'))

@@ -296,6 +296,11 @@ export interface GatewayConfig {
   concurrencyMultiplier?: number;    // 动态并发乘数，>0 时启用：有效并发 = max(maxConcurrent, 乘数 x 可用账号数)
   queueSizeMultiplier?: number;      // 动态队列乘数，>0 时启用：有效队列 = max(queueMaxSize, 乘数 x 可用账号数)
 
+  // 账号等待队列配置
+  accountWaitEnabled?: boolean;       // 并发满时是否排队等待账号释放，默认 true
+  accountWaitTimeoutMs?: number;      // 等待超时（毫秒），默认 5000
+  accountWaitMaxSize?: number;        // 最大等待队列长度，默认 50
+
   // Session 粘性配置
   sessionEnabled?: boolean;                    // 是否启用 session 粘性，默认 true
   sessionTtlSeconds?: number;                  // session 映射过期时间（秒），默认 3600
@@ -371,6 +376,11 @@ export interface UpdateConfigRequest {
   // 动态并发配置
   concurrencyMultiplier?: number;
   queueSizeMultiplier?: number;
+
+  // 账号等待队列配置
+  accountWaitEnabled?: boolean;
+  accountWaitTimeoutMs?: number;
+  accountWaitMaxSize?: number;
 
   // Session 粘性配置
   sessionEnabled?: boolean;

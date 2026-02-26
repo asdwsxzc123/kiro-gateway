@@ -283,6 +283,11 @@ export interface ProxyConfig {
   concurrencyMultiplier?: number  // 动态并发乘数，>0 时：有效并发 = max(maxConcurrent, 乘数 x 可用账号数)
   queueSizeMultiplier?: number    // 动态队列乘数，>0 时：有效队列 = max(queueMaxSize, 乘数 x 可用账号数)
 
+  // 账号等待队列配置
+  accountWaitEnabled?: boolean       // 并发满时是否排队等待，默认 true
+  accountWaitTimeoutMs?: number      // 等待超时（毫秒），默认 5000
+  accountWaitMaxSize?: number        // 最大等待队列长度，默认 50
+
   // Token 刷新配置
   tokenRefreshBeforeExpiry: number  // 提前刷新时间（秒）
   autoStart: boolean

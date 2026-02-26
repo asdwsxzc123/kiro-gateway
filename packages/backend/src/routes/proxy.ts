@@ -234,6 +234,9 @@ export async function updateProxyServerConfig(): Promise<void> {
     queueTimeoutMs: config.queueTimeoutMs,
     concurrencyMultiplier: config.concurrencyMultiplier,
     queueSizeMultiplier: config.queueSizeMultiplier,
+    accountWaitEnabled: config.accountWaitEnabled,
+    accountWaitTimeoutMs: config.accountWaitTimeoutMs,
+    accountWaitMaxSize: config.accountWaitMaxSize,
   })
 
   proxyServer.updatePoolConfig({
